@@ -75,6 +75,8 @@ uv run python -m experiments.post_training.snowball_rl --preset speed-medium \
 - speed-short measures its fixed-length throughput pass, then evaluates the full test panel greedily
   in the same engine job. The quality pass retains the throughput engine's arithmetic and cache
   settings; it runs without batch-invariant arithmetic. Its throughput and quality guards both count.
+  Read `test_panel/panel_scored_fraction` and `test_panel/grader_error_fraction` in the Invariants
+  table to identify quality-stage failures.
 - Every preset reports `timing/grading/*` and `timing/setup/*`. They can change the label to
   `regression` or `trade-off`; they do not change the verdict.
 

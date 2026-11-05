@@ -142,6 +142,8 @@ missing receipts/provenance/guards, missing mismatch tokens or zero control vari
 give `invalid` with a reason.
 
 The report bounds overlapping failure counts: upper ≤ 1% passes; lower > 1% fails.
+Each panel uses its own evaluation session's counters. Missing or inconsistent panel
+counters leave an unknown 0–100% bound.
 A candidate straddling 1% is `invalid` if every other check passes, otherwise `fail`.
 An ambiguous control is `invalid`. Both bounds remain in the report.
 
@@ -190,7 +192,7 @@ batch-invariant arithmetic with prefix caching disabled, except speed-short: its
 pass keeps the throughput engine's arithmetic, attention backend and cache settings.
 Controls and candidates use that same policy.
 
-Reports join evaluation answers to the run's task manifest by TaskSpec ID and keep attempts and weight steps separate. Verifier scores are normalized by their declared bounds. The equal-family mean first averages each task's scored answers, then tasks within a family, then families. Scored coverage is reported separately.
+Reports join evaluation answers to the run's task manifest by TaskSpec ID and keep attempts and weight steps separate. An answer counts as scored only with successful verification and no exception or error treatment. Verifier scores are normalized by their declared bounds. The equal-family mean first averages each task's scored answers, then tasks within a family, then families. Scored coverage uses the tasks in the run's recorded inputs.
 
 Each update records `timing/grading/{mean,p50,p95,max}` and
 `timing/setup/{mean,p50,p95,max}` in seconds over its retained, scored TaskSpec answers.

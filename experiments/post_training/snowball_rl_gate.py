@@ -31,11 +31,12 @@ from typing import TypeGuard
 import click
 import pyarrow as pa
 import pyarrow.compute as pc
+import pyarrow.parquet as pq
 from marin.execution.artifact import Artifact
 from marin.execution.fingerprint import canonical_json, fingerprint_hash
 from marin.execution.lazy import OUT, ArtifactStep, apply, run
 from marin.experiment.namespacing import user_owned_name
-from marin.rl.skyrl import SkyRLReceiptLookupError, SkyRLRun, read_skyrl_launch_receipt
+from marin.rl.skyrl import SkyRLReceiptLookupError, SkyRLRun, read_skyrl_launch_config, read_skyrl_launch_receipt
 from pydantic import BaseModel
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import StoragePath
@@ -46,6 +47,7 @@ from taskcompendium.grading_result import Outcome
 from experiments.post_training import snowball_rl_presets as presets
 from experiments.post_training import snowball_rl_scoring as scoring
 from experiments.post_training.snowball_rl_scoring import InvalidComparison
+from experiments.post_training.task_curation.inventory import TASK_SPEC_COLUMN
 
 GATE_REVISION = "2026.11.05.2"
 GATE_REPORT_FILENAME = "gate_report.json"
@@ -298,7 +300,7 @@ def _verdict(
             None,
             "; ".join(
                 f"grader-error union is ambiguous: lower={row.lower_bound:.12g}, upper={row.upper_bound:.12g}, "
-                f"limit={row.limit}; recorded counts do not identify overlap"
+                f"limit={row.limit}; available counters do not determine the grader-error fraction"
                 for row in ambiguous
             ),
         )
@@ -348,16 +350,64 @@ def _gated(evaluation: presets.Evaluation, preset: presets.Preset) -> bool:
     return any(metric.key.startswith(evaluation.name + "/") for metric in preset.guards)
 
 
+def _evaluation_ids(sources: Sequence[Mapping[str, str]]) -> frozenset[str]:
+    ids = []
+    try:
+        for source in sources:
+            if source["kind"] != "directory":
+                raise InvalidComparison("panel comparison requires recorded TaskSpec directory sources")
+            path = StoragePath(source["uri"]) / source["relative_path"]
+            fs, key = filesystem_for(str(path))
+            with fs.open(key, "rb") as stream:
+                for batch in pq.ParquetFile(stream).iter_batches(columns=[TASK_SPEC_COLUMN]):
+                    ids.extend(json.loads(row[TASK_SPEC_COLUMN])["id"] for row in batch.to_pylist())
+        if not ids or any(not isinstance(item, str) or not item for item in ids) or len(set(ids)) != len(ids):
+            raise InvalidComparison("recorded evaluation has empty, malformed or duplicate TaskSpec IDs")
+    except (KeyError, TypeError, ValueError, OSError) as error:
+        raise InvalidComparison(f"cannot read recorded evaluation tasks: {error}") from error
+    return frozenset(ids)
+
+
+def _grader_errors(
+    rows: Sequence[Mapping[str, float]], prefix: str, name: str, *, answers: int | None = None
+) -> ErrorBoundInvariant:
+    recorded = all(prefix + outcome in row for row in rows for outcome in (*Outcome, "rollout_failure"))
+    counts = [row.get(prefix + outcome, 0) for row in rows for outcome in (*Outcome, "rollout_failure")]
+    if any(
+        not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0 or value != int(value)
+        for value in counts
+    ):
+        raise InvalidComparison(f"invalid outcome counts for {name}")
+
+    def count(*outcomes: str) -> float:
+        return math.fsum(row.get(prefix + outcome, 0) for row in rows for outcome in outcomes)
+
+    total = count(*Outcome)
+    bad = count(Outcome.INFRA_ERROR, Outcome.UNAVAILABLE, Outcome.INVALID_TASK)
+    failures = count("rollout_failure")
+    lower, upper = (max(bad, failures) / total, min(total, bad + failures) / total) if total else (1.0, 1.0)
+    if answers is not None and (not recorded or total != answers or failures > total):
+        lower, upper = 0.0, 1.0
+    return ErrorBoundInvariant(
+        name=name,
+        value=upper,
+        lower_bound=lower,
+        upper_bound=upper,
+        limit=GRADER_ERROR_LIMIT,
+        holds=upper <= GRADER_ERROR_LIMIT and recorded,
+    )
+
+
 def _session_invariants(
-    name: str, table: pa.Table, evaluation: presets.Evaluation, preset: presets.Preset
+    name: str, table: pa.Table, evaluation: presets.Evaluation, preset: presets.Preset, expected_ids: frozenset[str]
 ) -> list[Invariant]:
     rows = table.to_pylist()
     counts = Counter(row["item"] for row in rows)
-    expected = presets.evaluation_answer_count(evaluation, presets.default_selection())
-    holds = len(counts) * evaluation.answers == expected and set(counts.values()) == {evaluation.answers}
+    expected = len(expected_ids) * evaluation.answers
+    holds = counts.keys() == expected_ids and set(counts.values()) == {evaluation.answers}
     result = [Invariant(name=f"{name}/batch_finished", value=len(rows), limit=expected, holds=holds)]
     if _gated(evaluation, preset):
-        coverage = len({row["item"] for row in rows if row["scored"]}) / (expected / evaluation.answers)
+        coverage = len(expected_ids.intersection(row["item"] for row in rows if row["scored"])) / len(expected_ids)
         result.append(
             Invariant(
                 name=f"{name}/panel_scored_fraction",
@@ -398,8 +448,11 @@ def _load_run(path: str, preset: presets.Preset, rates: pa.Table | None, inputs:
         Invariant(name="planned_updates", value=len(completed), limit=len(planned), holds=completed == planned)
     ]
     answers = scoring.evaluation_answers(path) if preset.evaluations else []
+    launch = read_skyrl_launch_config(path) if preset.evaluations else {}
+    named = launch.get("inputs", {}).get("evaluation_data", {})
     scores, initial_scores, panel_ids = [scoring.EVAL_SCORE_SCHEMA.empty_table()], [], {}
     for evaluation in preset.evaluations:
+        expected_ids = _evaluation_ids(named.get(evaluation.name, launch["inputs"]["validation_data"]))
         table = scoring.panel_scores(evaluation, path, answers)
         initial = table.filter(pc.equal(table["step"], 0))
         table = table.filter(pc.equal(table["step"], -1 if generating else preset.updates))
@@ -408,11 +461,33 @@ def _load_run(path: str, preset: presets.Preset, rates: pa.Table | None, inputs:
         ids = frozenset(table["item"].to_pylist())
         if evaluation.file != scoring.TRAIN_STEM:
             panel_ids[evaluation.name] = ids
-        invariants.extend(_session_invariants(evaluation.name, table, evaluation, preset))
+        invariants.extend(_session_invariants(evaluation.name, table, evaluation, preset, expected_ids))
+        quality = evaluation.file != scoring.TRAIN_STEM and _gated(evaluation, preset)
+        prefix = f"eval/{evaluation.name}/all/outcome/" if evaluation.name in named else "eval/all/outcome/"
+        if quality:
+            invariants.append(
+                _grader_errors(
+                    [metrics.get(0 if generating else preset.updates, {})],
+                    prefix,
+                    evaluation.name + "/grader_error_fraction",
+                    answers=table.num_rows,
+                )
+            )
         if inputs.init is not None:
             if initial.num_rows and frozenset(initial["item"].to_pylist()) != ids:
                 raise InvalidComparison(f"initial and final panel task IDs differ: {path}")
-            invariants.extend(_session_invariants(evaluation.name + "/initial", initial, evaluation, preset))
+            invariants.extend(
+                _session_invariants(evaluation.name + "/initial", initial, evaluation, preset, expected_ids)
+            )
+            if quality:
+                invariants.append(
+                    _grader_errors(
+                        [metrics.get(0, {})],
+                        prefix,
+                        evaluation.name + "/initial/grader_error_fraction",
+                        answers=initial.num_rows,
+                    )
+                )
     if not generating:
         finite = all(
             "policy/raw_grad_norm" in row
@@ -422,27 +497,7 @@ def _load_run(path: str, preset: presets.Preset, rates: pa.Table | None, inputs:
         )
         invariants.append(Invariant(name="finite_losses_and_gradients", value=finite, limit=True, holds=finite))
 
-    def count(*outcomes: str) -> float:
-        return math.fsum(row.get(OUTCOME_PREFIX + outcome, 0) for row in training for outcome in outcomes)
-
-    total, bad, failures = (
-        count(*Outcome),
-        count(Outcome.INFRA_ERROR, Outcome.UNAVAILABLE, Outcome.INVALID_TASK),
-        count("rollout_failure"),
-    )
-    lower, upper = (max(bad, failures) / total, min(total, bad + failures) / total) if total else (1.0, 1.0)
-    recorded = all(OUTCOME_PREFIX + outcome in row for row in training for outcome in (*Outcome, "rollout_failure"))
-    holds = upper <= GRADER_ERROR_LIMIT and recorded
-    invariants.append(
-        ErrorBoundInvariant(
-            name="grader_error_fraction",
-            value=upper,
-            lower_bound=lower,
-            upper_bound=upper,
-            limit=GRADER_ERROR_LIMIT,
-            holds=holds,
-        )
-    )
+    invariants.append(_grader_errors(training, OUTCOME_PREFIX, "grader_error_fraction"))
     fixed = preset.recipe.fixed_reply_tokens
     if fixed is not None:
         if generating:
