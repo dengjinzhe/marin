@@ -115,6 +115,7 @@ from skyrl_train.inference_engines.vllm.utils import apply_openai_sampling
 from skyrl_train.inference_engines.inference_engine_client import AccumulatedResponse, _prepare_retry_request
 from skyrl_train.inference_engines.chat_continuation import NATIVE_SAMPLING_KEY
 from skyrl_train.trajectory_runners.model_clients import DirectModelClient
+from skyrl_train.evaluation_profiles import evaluation_profile_config, parse_evaluation_profiles
 
 continuations = (
     AccumulatedResponse(),
@@ -186,6 +187,16 @@ for accumulated in continuations:
 omitted = {NATIVE_SAMPLING_KEY: True, "temperature": 0.0}
 apply_openai_sampling(omitted, {"temperature": 1.0, "top_p": 0.9}, False)
 assert omitted["temperature"] == 0.0 and omitted["top_p"] == 0.9
+
+def quality_request(config):
+    if not config.inputs.get("evaluation_data"):
+        return None
+    profile = parse_evaluation_profiles(config.skyrl.trainer.callbacks[0].additional_evaluations)["test_panel"]
+    merged = evaluation_profile_config(config.skyrl, profile, "test_panel")
+    assert config.inputs.validation_data[0].identity != config.inputs.evaluation_data.test_panel[0].identity
+    return asyncio.run(native_request(get_vllm_sampling_params(merged.generator.eval_sampling_params),
+                                     {"temperature": 1.0}, False))
+
 print(json.dumps([{
     "path": path, "name": config.run.id, "entrypoint": config.runtime.entrypoint,
     "nodes": config.iris.allocation.num_nodes, "eval_interval": config.skyrl.trainer.eval_interval,
@@ -194,6 +205,7 @@ print(json.dumps([{
     "window": config.skyrl.generator.engine_init_kwargs.max_model_len,
     "batch": config.skyrl.trainer.train_batch_size, "samples": config.skyrl.generator.n_samples_per_prompt,
     "tools": config.skyrl.generator.engine_init_kwargs.get("tool_parser"),
+    "quality_wire": quality_request(config),
     "fixed": config.skyrl.generator.eval_sampling_params.ignore_eos or config.skyrl.generator.sampling_params.ignore_eos,
     "overlong_filtering": config.skyrl.generator.apply_overlong_filtering,
     "training": config.runtime.training_type is not None,
@@ -203,7 +215,8 @@ print(json.dumps([{
     "export_hf": config.run.export_hf,
     "micro": config.skyrl.trainer.micro_train_batch_size_per_gpu,
     "forward_micro": config.skyrl.trainer.micro_forward_batch_size_per_gpu,
-    "terminal_eval": [entry.eval_on_train_end for entry in config.skyrl.trainer.callbacks if entry.type == "evaluation"],
+    "terminal_eval": [entry.eval_on_train_end for entry in config.skyrl.trainer.callbacks if entry.type == "evaluation"]
+        if config.runtime.training_type is not None else [],
     "wire": asyncio.run(native_request(
         get_vllm_sampling_params(config.skyrl.generator.eval_sampling_params),
         {"temperature": 0.7, "top_p": 0.9, "top_k": 8, "min_p": 0.2},
@@ -215,6 +228,7 @@ print(json.dumps([{
     )
     assert len(rows) == len(paths)
     for row in rows:
+        assert row["tools"] == "hermes"
         assert row["team"] == ("marin-community" if "speed-short-" in row["name"] else "test-team")
         name = row["name"]
         if "speed-short-" in name or "data-short-" in name:
@@ -223,6 +237,14 @@ print(json.dumps([{
             assert row["eval_interval"] > 0 and row["validation"], row
             expected = 2048 if "speed-short-" in name else 1024
             assert row["admission"] == expected, row
+        if "speed-short-" in name:
+            assert row["quality_wire"] == {
+                "temperature": 0.0,
+                "max_completion_tokens": 8192,
+                "ignore_eos": False,
+                "seed": presets.SEED,
+                "logprobs": None,
+            }
         if "train-long-" in name:
             assert row["terminal_eval"] == [row["steps"] % 10 != 0], row
         if "learning-medium-" in name or "/control/learning-medium-" in name:
@@ -263,7 +285,13 @@ print(json.dumps([{
             settings=(presets.parse_setting("generator.sampling_params={ignore_eos: true}"),),
         )
     execution = next(value for value in changed.runtime_args.values() if isinstance(value, adapter.IrisSkyRLExecution))
-    assert presets.JUDGE_KEY in execution.required_env_vars
+    assert presets.JUDGE_KEY not in execution.required_env_vars
+    summary = Path(selection.path()) / "summary.json"
+    content = json.loads(summary.read_text())
+    content["grader_kind_counts"]["train"]["remote_judge"] = 1
+    summary.write_text(json.dumps(content))
+    with pytest.raises(click.BadParameter, match="AI-judge"):
+        snowball.build_run(presets.PRESETS["learning-medium"])
 
 
 @pytest.mark.timeout(180)
@@ -318,7 +346,7 @@ print(json.dumps([
     )
 
 
-def test_run_identity_tracks_code_inputs_and_replicates(selection, monkeypatch):
+def test_run_identity_tracks_code_inputs_and_replicates(selection, monkeypatch, tmp_path):
     learning = presets.PRESETS["learning-medium"]
     data = presets.PRESETS["data-short"]
     long = presets.PRESETS["train-long"]
@@ -335,11 +363,20 @@ def test_run_identity_tracks_code_inputs_and_replicates(selection, monkeypatch):
     ]
     assert len({step.name for step in repeated.runs}) == 3
     initializer = ArtifactStep.adopt("tests/initializer", "2026.10.26", selection.path(), kind=LevanterCheckpoint)
+    panel_name, panel_version = presets.DEFAULT_TEST_PANEL.split("@")
+    new_panel = tmp_path / panel_name / "2026.11.05"
+    new_panel.mkdir(parents=True)
+    (new_panel / "summary.json").write_bytes((tmp_path / panel_name / panel_version / "summary.json").read_bytes())
+    changed_panel = replace(
+        learning,
+        evaluations=tuple(replace(evaluation, source=f"{panel_name}@2026.11.05") for evaluation in learning.evaluations),
+    )
     pairs = [
         (name(), name(learning, "trainer.policy.optimizer_config.lr=2e-6")),
         (name(data, tasks=selection), name(data, tasks=replace(selection, version="2026.10.27"))),
         (name(), name(init=initializer)),
         (name(long), name(long, layout=presets.P40)),
+        (name(), name(changed_panel)),
     ]
     assert all(left != right for left, right in pairs), pairs
     assert name(

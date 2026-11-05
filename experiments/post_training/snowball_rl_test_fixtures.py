@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+from dataclasses import replace
 
 import pytest
 from marin.execution.lazy import ArtifactStep
@@ -14,7 +15,14 @@ from experiments.post_training import snowball_rl_presets as presets
 @pytest.fixture
 def selection(tmp_path, monkeypatch):
     monkeypatch.setattr(presets, "SELECTION_ROOT", str(tmp_path))
-    monkeypatch.setenv(presets.JUDGE_KEY, "fixture")
+    monkeypatch.setattr(
+        snowball.snowball_rl_gate,
+        "CONTROLS",
+        {
+            name: tuple(replace(pin, revision=presets.PRESET_REVISION) for pin in pins)
+            for name, pins in snowball.snowball_rl_gate.CONTROLS.items()
+        },
+    )
     root = tmp_path / "snowball-100k" / presets.DEFAULT_SELECTION_VERSION
     root.mkdir(parents=True)
     (root / "summary.json").write_text(
@@ -23,7 +31,19 @@ def selection(tmp_path, monkeypatch):
                 "recipe": {"heldout": {"version": "2026.10.23.1", "rows": 910}},
                 "validation_rows": 100,
                 "full_validation_rows": 910,
-                "grader_kind_counts": {"train": {"remote_judge": 1}},
+                "grader_kind_counts": {"train": {"remote_judge": 0}, "validation": {}, "full_validation": {}},
+            }
+        )
+    )
+    panel_name, panel_version = presets.DEFAULT_TEST_PANEL.split("@")
+    panel = tmp_path / panel_name / panel_version
+    panel.mkdir(parents=True)
+    (panel / "summary.json").write_text(
+        json.dumps(
+            {
+                "validation_rows": 100,
+                "full_validation_rows": 1500,
+                "grader_kind_counts": {"validation": {}, "full_validation": {}},
             }
         )
     )

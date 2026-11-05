@@ -141,7 +141,6 @@ def training_config(
         "environment": {
             "task_sessions": {
                 "local": {},
-                "remote_judge": {"base_url": "https://api.together.xyz/v1", "api_key_env": presets.JUDGE_KEY},
             }
         },
         "data": {"kind": "parquet", "shuffle": True},
@@ -194,6 +193,11 @@ def training_config(
             "max_num_seqs": 1024,
             "max_num_batched_tokens": 8192,
             "enable_prefix_caching": preset.name == "speed-short",
+            "trajectory_reward_shaping": {
+                "enabled": True,
+                "overlong": {"penalty_scale": 0.0},
+                "reasoning_span": {"penalty": 0.1, "target": "marker"},
+            },
             "enable_chunked_prefill": True,
             "enforce_eager": False,
             "enable_http_endpoint": False,
@@ -210,7 +214,6 @@ def training_config(
         "trajectory_runner": {"max_concurrent_tasks": 1024},
         "extra_env": {
             "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True",
-            "VERIFYIT_JUDGE_MODEL": "openai/gpt-oss-120b",
         },
     }
     geometry = recipe.layout.megatron
@@ -335,6 +338,7 @@ def _run_step(
     retention: int,
     validation_data: tuple[ArtifactDataSource, ...],
     wandb_entity: str | None,
+    evaluation_data: tuple[tuple[str, tuple[ArtifactDataSource, ...]], ...] = (),
     checkpoint_root: str | None = None,
 ) -> ArtifactStep[SkyRLRun]:
     plan = layout.role_plan
@@ -346,6 +350,7 @@ def _run_step(
             model=model,
             train_data=(() if plan.generate_only else (ArtifactDataSource(selection, relative_path=TRAIN_FILENAME),)),
             validation_data=validation_data,
+            evaluation_data=evaluation_data,
             topology=SkyRLTopology(num_nodes=plan.num_nodes, gpus_per_node=8, gpu_variant="H100", role_plan=plan),
             retention=SkyRLRetentionPolicy(resume_checkpoint_count=retention),
             seed=config["trainer"]["seed"],
@@ -436,12 +441,13 @@ def build_run(
     if init is not None:
         selected = {name: replace(evaluation, at_start=True) for name, evaluation in selected.items()}
     chosen = tuple(selected.values())
-    if sum(evaluation.harness == presets.EvalHarness.PANEL for evaluation in chosen) > 1:
+    generating = preset.recipe.layout.role_plan.generate_only
+    if not generating and len(chosen) > 1:
         raise click.BadParameter("a run evaluates at most one TaskSpec panel")
     required = {key for evaluation in selected.values() for key in presets.EVALUATORS[evaluation.harness].required_env}
     counts = summary["grader_kind_counts"]["train"]
-    if counts.get(GraderKind.REMOTE_JUDGE, 0) and preset.name != "speed-short":
-        required.add(presets.JUDGE_KEY)
+    if counts.get(GraderKind.REMOTE_JUDGE, 0):
+        raise click.BadParameter("Snowball training selections must contain no AI-judge-graded tasks")
     missing = sorted(key for key in required if not os.environ.get(key))
     if missing:
         raise click.BadParameter(f"missing required credentials: {', '.join(missing)}")
@@ -450,15 +456,34 @@ def build_run(
     model = _model_input(init)
     checkpoint_root = _resume_checkpoint_root(resume_from, model) if resume_from is not None else None
     validation_data = ()
-    for evaluation in chosen:
+    evaluation_data = []
+    profiles = {}
+    evaluation_inputs = []
+    expected_tasks = 0
+    for index, evaluation in enumerate(chosen):
         evaluation_tasks = evaluation.tasks(selection, default)
-        validation_data = presets.EVALUATORS[evaluation.harness].configure(evaluation, config, evaluation_tasks)
-        if preset.recipe.layout.role_plan.generate_only:
+        evaluation_inputs.append((evaluation.name, evaluation_tasks.name, evaluation_tasks.version))
+        grader_counts = presets.selection_summary(evaluation_tasks)["grader_kind_counts"][evaluation.file]
+        if grader_counts.get(GraderKind.REMOTE_JUDGE, 0):
+            raise click.BadParameter("Snowball evaluation selections must contain no AI-judge-graded tasks")
+        evaluator = presets.EVALUATORS[evaluation.harness]
+        if index == 0:
+            validation_data = evaluator.configure(evaluation, config, evaluation_tasks)
+            expected_tasks = presets.evaluation_answer_count(evaluation, evaluation_tasks) // evaluation.answers
+        else:
+            profile_config = deepcopy(config)
+            evaluation_data.append((evaluation.name, evaluator.configure(evaluation, profile_config, evaluation_tasks)))
+            profiles[evaluation.name] = {
+                "sampling_params": profile_config["generator"]["eval_sampling_params"],
+                "n_samples_per_prompt": profile_config["generator"]["eval_n_samples_per_prompt"],
+            }
+        if generating and index == 0:
             config["trajectory_runner"]["max_concurrent_tasks"] = presets.evaluation_answer_count(
                 evaluation, evaluation_tasks
             )
-    if not preset.recipe.layout.role_plan.generate_only:
-        expected_tasks = presets.selection_summary(default)["validation_rows"]
+    if generating and profiles:
+        config["trainer"]["callbacks"] = [{"type": "evaluation", "additional_evaluations": profiles}]
+    if not generating:
         config["trainer"]["callbacks"] = _callbacks(preset, chosen, expected_tasks)
     if learning and export_hf:
         config["trainer"]["callbacks"].extend(
@@ -473,7 +498,7 @@ def build_run(
         "layout": preset.recipe.layout.name,
         "resume": None if resume_from is None else (resume_from.name, resume_from.version),
         "settings": sorted({setting.key: setting.value for setting in settings}.items()),
-        "evaluations": sorted(selected),
+        "evaluations": sorted(evaluation_inputs),
         "keep_weights": keep_weights,
     }
     inputs_hash = fingerprint_hash(json.dumps(changes, sort_keys=True, default=str))
@@ -491,6 +516,7 @@ def build_run(
             export_hf=export_hf,
             retention=5 if preset.checkpoint_every else 2,
             validation_data=validation_data,
+            evaluation_data=tuple(evaluation_data),
             wandb_entity=wandb_entity,
             checkpoint_root=checkpoint_root,
         )
