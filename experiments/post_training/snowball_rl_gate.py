@@ -452,10 +452,10 @@ def _load_run(path: str, preset: presets.Preset, rates: pa.Table | None, inputs:
     named = launch.get("inputs", {}).get("evaluation_data", {})
     scores, initial_scores, panel_ids = [scoring.EVAL_SCORE_SCHEMA.empty_table()], [], {}
     for evaluation in preset.evaluations:
+        quality = evaluation.file != scoring.TRAIN_STEM and _gated(evaluation, preset)
         expected_ids = _evaluation_ids(named.get(evaluation.name, launch["inputs"]["validation_data"]))
-        if rates is not None and _gated(evaluation, preset) and evaluation.file != scoring.TRAIN_STEM:
-            if frozenset(rates["task_id"].to_pylist()) != expected_ids:
-                raise InvalidComparison("pass-rate panel task IDs differ from the run's recorded evaluation tasks")
+        if rates is not None and quality and frozenset(rates["task_id"].to_pylist()) != expected_ids:
+            raise InvalidComparison("pass-rate panel task IDs differ from the run's recorded evaluation tasks")
         table = scoring.panel_scores(evaluation, path, answers)
         initial = table.filter(pc.equal(table["step"], 0))
         table = table.filter(pc.equal(table["step"], -1 if generating else preset.updates))
@@ -465,7 +465,6 @@ def _load_run(path: str, preset: presets.Preset, rates: pa.Table | None, inputs:
         if evaluation.file != scoring.TRAIN_STEM:
             panel_ids[evaluation.name] = ids
         invariants.extend(_session_invariants(evaluation.name, table, evaluation, preset, expected_ids))
-        quality = evaluation.file != scoring.TRAIN_STEM and _gated(evaluation, preset)
         prefix = f"eval/{evaluation.name}/all/outcome/" if evaluation.name in named else "eval/all/outcome/"
         if quality:
             invariants.append(
