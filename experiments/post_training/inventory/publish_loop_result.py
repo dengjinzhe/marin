@@ -103,8 +103,7 @@ class RunSummary(BaseModel):
                 raise ValueError("Attempted count exceeds the fixed evaluation cohort")
         if self.status == "succeeded" and any(
             phase is None
-            or phase.attempted != self.evaluation.task_count * phase.samples_per_task
-            or phase.scored != self.evaluation.task_count * phase.samples_per_task
+            or not (phase.scored == phase.attempted == self.evaluation.task_count * phase.samples_per_task)
             for phase in (self.baseline, self.final)
         ):
             raise ValueError("Successful attempts require complete baseline and final scoring")
