@@ -16,7 +16,7 @@ import skyrl_train
 import torch
 import zstandard
 from omegaconf import OmegaConf
-from taskcompendium.grading_result import GradeResult, Outcome
+from taskcompendium.grading_result import Outcome
 from taskcompendium.grader import verifyit_package
 from verifyit.spec import ExactSpec
 from skyrl_train.evaluate import evaluation_dump_dir
@@ -30,15 +30,15 @@ from skyrl_train.config.utils import get_default_config
 from skyrl_train.inference_engines.inference_engine_client import InferenceEngineClient
 from skyrl_train.trajectory_runners.model_clients import DirectModelClient
 from skyrl_train.inference_engines.vllm.stats import (
-    InferenceStatsSnapshot,
     IntervalReadMode,
     VLLMCumulativeStats,
     VLLMCurrentStats,
     VLLMEngineStatsSnapshot,
     VLLMIntervalStats,
 )
-from skyrl_train.rollouts.task_projections import WholeTaskProjection
-from skyrl_train.rollouts.training_record import TrainingRollout
+from rolloutengine import engine as rollout_engine
+from skyrl_train.rollouts.task_worker import TaskRolloutWorkerSpec
+from skyrl_train.rollouts.workers import WorkerShard
 
 from tests.cpu.cat_count_policy import POLICY_PREFIX, download_policy
 from tests.cpu.task_specs import lowered_task, text_task
@@ -356,9 +356,7 @@ def test_cat_count_rloo_n_preserves_metrics_across_resume(
         training = [row for row in records if "policy/raw_grad_norm" in row]
         assert [row["step"] for row in training] == list(range(1, steps + 1))
         assert all(row["generate/prompts_dropped_too_long"] == 1 for row in training)
-        assert all(
-            row["reward/zero_std_group_fraction"] == row["reward/rloo_n_filtered_groups"] / 5 for row in training
-        )
+        assert all(row["reward/zero_std_group_fraction"] == row["reward/rloo_n_filtered_groups"] / 5 for row in training)
         assert all(row["reward/rloo_n_total_groups"] == 5 for row in training)
         assert any(row["reward/rloo_n_filtered_groups"] > 0 for row in training)
         assert sum(records[-1][f"eval/all/outcome/{outcome.value}"] for outcome in Outcome) == 20
@@ -376,9 +374,8 @@ def test_cat_count_rloo_n_preserves_metrics_across_resume(
 
 
 @pytest.mark.timeout(RUN_TIMEOUT_SECONDS)
-@pytest.mark.parametrize("recorded", [False, True], ids=["cpu", "profile-isolation"])
 def test_cat_count_generate_preserves_task_ids_and_token_metrics(
-    tmp_path, cat_count_policy, cat_count_session, forkserver_context, monkeypatch, recorded
+    tmp_path, cat_count_policy, cat_count_session, forkserver_context, monkeypatch
 ):
     root = tmp_path / "generate"
     cfg = cat_count_config(root, cat_count_policy)
@@ -414,108 +411,101 @@ def test_cat_count_generate_preserves_task_ids_and_token_metrics(
     cfg.generator.eval_n_samples_per_prompt = 2
     cfg.generator.eval_sampling_params.ignore_eos = True
     cfg.generator.eval_sampling_params.max_generate_length = 8
-    if not recorded:
-        records = run_process(forkserver_context, root, cfg, run_cat_count_generate)
-        assert len(records) == 1
-        metrics = records[0]
-        rows = [
-            json.loads(line)
-            for line in (
-                (Path(evaluation_dump_dir(str(root / "exports"), None)) / "train.jsonl").read_text().splitlines()
-            )
-        ]
-        assert metrics["generate/prompts_dropped_too_long"] == 1
-        assert len(rows) == 2 * len(expected)
-        assert {row["task_id"] for row in rows} == expected.keys()
-        assert all(expected[row["task_id"]] in row["input_prompt"] and row["uid"] != row["task_id"] for row in rows)
-        assert all(
-            len(row["response_token_ids"]) == 8 for row in rows if not row["task_id"].startswith("rollout-error")
-        )
-        tokens = sum(len(row["response_token_ids"]) for row in rows)
-        assert metrics["generate/response_tokens"] == tokens
-        assert metrics["generate/wall_seconds"] > 0
-        generated_tokens = 2 * len(expected) * 8
-        assert metrics["generate/vllm/generation_tokens"] == generated_tokens
-        assert metrics["generate/tokens_per_second_per_gpu"] == pytest.approx(
-            generated_tokens / metrics["generate/wall_seconds"] / 2
-        )
-        assert metrics["generate/vllm/num_engines"] == 2
-        assert {outcome.value: metrics[f"generate/outcome/{outcome.value}"] for outcome in Outcome} == {
-            "graded": 8,
-            "submission_failure": 0,
-            "invalid_task": 0,
-            "infra_error": 0,
-            "unavailable": 2,
-        }
-        assert metrics["generate/outcome/rollout_failure"] == 2
-        for raw in TASK_TIMING_KEYS:
-            assert all(math.isfinite(metrics[f"{raw}/{stat}"]) for stat in ("mean", "p50", "p95", "max"))
-        assert metrics["timing/grading/mean"] > 0
-        assert metrics["timing/setup/max"] == 0
-
-        return
+    records = run_process(forkserver_context, root, cfg, run_cat_count_generate)
+    assert len(records) == 1
+    metrics = records[0]
+    rows = [
+        json.loads(line)
+        for line in (Path(evaluation_dump_dir(str(root / "exports"), None)) / "train.jsonl").read_text().splitlines()
+    ]
+    assert metrics["generate/prompts_dropped_too_long"] == 1
+    assert len(rows) == 2 * len(expected)
+    assert {row["task_id"] for row in rows} == expected.keys()
+    assert all(expected[row["task_id"]] in row["input_prompt"] and row["uid"] != row["task_id"] for row in rows)
+    assert all(len(row["response_token_ids"]) == 8 for row in rows if not row["task_id"].startswith("rollout-error"))
+    tokens = sum(len(row["response_token_ids"]) for row in rows)
+    assert metrics["generate/response_tokens"] == tokens
+    assert metrics["generate/wall_seconds"] > 0
+    generated_tokens = 2 * len(expected) * 8
+    assert metrics["generate/vllm/generation_tokens"] == generated_tokens
+    assert metrics["generate/tokens_per_second_per_gpu"] == pytest.approx(
+        generated_tokens / metrics["generate/wall_seconds"] / 2
+    )
+    assert metrics["generate/vllm/num_engines"] == 2
+    assert {outcome.value: metrics[f"generate/outcome/{outcome.value}"] for outcome in Outcome} == {
+        "graded": 8,
+        "submission_failure": 0,
+        "invalid_task": 0,
+        "infra_error": 0,
+        "unavailable": 2,
+    }
+    assert metrics["generate/outcome/rollout_failure"] == 2
+    for raw in TASK_TIMING_KEYS:
+        assert all(math.isfinite(metrics[f"{raw}/{stat}"]) for stat in ("mean", "p50", "p95", "max"))
+    assert metrics["timing/grading/mean"] > 0
+    assert metrics["timing/setup/max"] == 0
 
     panel = root / "data" / "quality.parquet"
-    write_tasks(panel, [task(3, "quality-only", {})])
-    clock = SimpleNamespace(value=0.0)
+    quality = task(3, "quality-only", {})
+    quality = quality.model_copy(
+        update={
+            "task": quality.task.model_copy(
+                update={"grader": verifyit_package(ExactSpec(expected=("cat cat cat",))).grader}
+            )
+        }
+    )
+    write_tasks(panel, [quality])
+    clock = SimpleNamespace(value=0.0, tick=3.0)
     monkeypatch.setattr(main_generate, "time", SimpleNamespace(perf_counter=lambda: clock.value))
 
-    class RecordedEvaluationService:
-        def __init__(self, config, tokenizer):
-            self.tokenizer = tokenizer
-            self.projection = WholeTaskProjection(config.generator, tokenizer)
+    def monotonic():
+        value = clock.value
+        clock.value += clock.tick
+        return value
+
+    monkeypatch.setattr(rollout_engine, "time", SimpleNamespace(monotonic=monotonic))
+    cfg.trajectory_runner.max_concurrent_tasks = 1
+    cfg.environment.task_sessions.max_verifier_workers = 0
+
+    class RecordedInferenceEngine:
+        def __init__(self, tokenizer, index):
+            self.tokenizer, self.index = tokenizer, index
             self.tokens = self.finished = 0
 
-        async def startup(self):
-            pass
+        async def tokenize(self, request):
+            return {
+                "tokens": self.tokenizer.apply_chat_template(
+                    request["json"]["messages"], tokenize=True, add_generation_prompt=True, return_dict=False
+                )
+            }
 
-        async def shutdown(self):
-            pass
-
-        def set_trajectory_sink(self, sink):
-            pass
-
-        async def start_eval_session(self, **kwargs):
-            pass
-
-        async def stop_eval_session(self):
-            pass
-
-        async def run(self, request):
-            row = request.rows[0]
-            quality = row.spec.task.id == "quality-only"
-            count = request.sampling_params["max_tokens"]
-            prompt = self.tokenizer.apply_chat_template(
-                request.public_prompts[0], tokenize=True, add_generation_prompt=True, return_dict=False
-            )
-            response = (self.tokenizer.encode("cat", add_special_tokens=False)[0],) * count
+        async def chat_completion(self, request):
+            count = request["json"]["max_completion_tokens"]
+            clock.tick = 103.0 if count == 3 else 3.0
+            clock.value += clock.tick
+            response = [self.tokenizer.encode("cat", add_special_tokens=False)[0]] * count
             self.tokens += count
             self.finished += 1
-            clock.value += 100.0 if quality else 3.0
-            rollout = TrainingRollout(
-                task_id=row.spec.task.id,
-                messages=(),
-                prompt_token_ids=tuple(prompt),
-                response_token_ids=response,
-                loss_mask=(1,) * count,
-                logprobs=(-0.1,) * count,
-                grade=GradeResult(Outcome.GRADED, float(not quality)),
-                stop_reason="length",
-                metrics={"timing/grading": 103.0 if quality else 3.0, "timing/setup": 1.0},
-            )
-            return self.projection.project([rollout], request)
+            return {
+                "usage": {"completion_tokens": count},
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": self.tokenizer.decode(response)},
+                        "token_ids": response,
+                        "finish_reason": "length",
+                        "logprobs": None,
+                    }
+                ],
+            }
 
         async def get_stats(self, read_mode=IntervalReadMode.RESET):
-            snapshot = InferenceStatsSnapshot(
-                engines=(
-                    VLLMEngineStatsSnapshot(
-                        engine_id="recorded",
-                        timestamp=clock.value,
-                        current=VLLMCurrentStats(),
-                        cumulative=VLLMCumulativeStats(generation_tokens=self.tokens),
-                        interval=VLLMIntervalStats(finished_requests=self.finished),
-                    ),
-                )
+            snapshot = VLLMEngineStatsSnapshot(
+                engine_id=str(self.index),
+                timestamp=clock.value,
+                current=VLLMCurrentStats(),
+                cumulative=VLLMCumulativeStats(generation_tokens=self.tokens),
+                interval=VLLMIntervalStats(finished_requests=self.finished),
             )
             if read_mode is IntervalReadMode.RESET:
                 self.finished = 0
@@ -525,12 +515,16 @@ def test_cat_count_generate_preserves_task_ids_and_token_metrics(
 
     class RecordedGenerateExp(TinyGenerateExp):
         def create_inference_engine_client(self, *, operation):
-            service = RecordedEvaluationService(self.cfg, self.tokenizer)
+            service = InferenceEngineClient(
+                [RecordedInferenceEngine(self.tokenizer, index) for index in range(2)], self.tokenizer, self.cfg
+            )
             services.append(service)
             return service
 
         def get_trajectory_runner(self, config, tokenizer, inference_engine_client):
-            return inference_engine_client
+            return TaskRolloutWorkerSpec.from_config(
+                config, inference_engine_client.engines, sessions=self.sessions
+            ).build(tokenizer, WorkerShard(0, 1))
 
     primary = None
     for profiles in (
@@ -543,7 +537,7 @@ def test_cat_count_generate_preserves_task_ids_and_token_metrics(
             }
         },
     ):
-        clock.value = 0.0
+        clock.value, clock.tick = 0.0, 3.0
         probe_root = root / ("profiled" if profiles else "primary")
         probe_cfg = OmegaConf.merge(
             cfg,
@@ -563,7 +557,8 @@ def test_cat_count_generate_preserves_task_ids_and_token_metrics(
             continue
         assert primary_values == primary
         assert result["eval/quality/all/response_tokens"] == 3
-        assert result["eval/quality/all/avg_score"] == 0.0
+        assert result["eval/quality/all/avg_verifier_score"] == 1.0
+        assert result["eval/quality/all/avg_score"] == 0.9
         assert result["eval/quality/all/timing/grading/mean"] == 103.0
         dump = Path(evaluation_dump_dir(str(probe_root / "quality"), None)) / "train.jsonl"
         assert [json.loads(line)["task_id"] for line in dump.read_text().splitlines()] == ["quality-only"]
