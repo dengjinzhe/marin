@@ -476,6 +476,9 @@ class SkyRLSpec:
         _validate_skyrl_recipe(self.config_yaml, self.topology)
         if not self.evaluation_data:
             return
+        names = [name for name, _ in self.evaluation_data]
+        if len(names) != len(set(names)):
+            raise ValueError("duplicate evaluation data names")
         recipe = yaml.safe_load(self.config_yaml)
         for name, _ in self.evaluation_data:
             profiles = [

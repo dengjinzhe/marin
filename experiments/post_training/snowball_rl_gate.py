@@ -374,7 +374,11 @@ def _grader_errors(
     recorded = all(prefix + outcome in row for row in rows for outcome in (*Outcome, "rollout_failure"))
     counts = [row.get(prefix + outcome, 0) for row in rows for outcome in (*Outcome, "rollout_failure")]
     if any(
-        not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0 or value != int(value)
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(value)
+        or value < 0
+        or value != int(value)
         for value in counts
     ):
         raise InvalidComparison(f"invalid outcome counts for {name}")

@@ -474,6 +474,8 @@ def test_skyrl_step_fingerprint_includes_roles_and_excludes_placement() -> None:
         ).fingerprint()
     )
     assert panel in profiled.deps
+    with pytest.raises(ValueError, match="duplicate evaluation"):
+        dataclasses.replace(profiled_spec, evaluation_data=(("quality", (source,)), ("quality", (changed_panel,))))
     for name, profile in (("missing", {}), ("quality", {"data_files": ["other.parquet"]})):
         recipe["trainer"]["callbacks"][0]["additional_evaluations"]["quality"] = profile
         with pytest.raises(ValueError, match="evaluation"):

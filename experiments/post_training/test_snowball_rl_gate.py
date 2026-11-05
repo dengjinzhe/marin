@@ -668,6 +668,22 @@ BROKEN_FAILS = {"planned_updates", "finite_losses_and_gradients", "grader_error_
         pytest.param(
             "speed-short",
             {
+                "quality_unscored": 1,
+                "quality_metrics": {
+                    "eval/test_panel/all/outcome/infra_error": True,
+                    "eval/test_panel/all/outcome/unavailable": 0,
+                },
+            },
+            {},
+            "invalid",
+            None,
+            set(),
+            None,
+            id="quality-boolean-counter",
+        ),
+        pytest.param(
+            "speed-short",
+            {
                 "quality_unscored": 12,
                 "quality_metrics": {
                     "eval/test_panel/all/outcome/graded": 3000,
