@@ -295,18 +295,21 @@ print(json.dumps([{
 
 
 @pytest.mark.timeout(180)
-def test_gated_presets_match_calibrated_configs(selection, tmp_path, monkeypatch):
+def test_gated_presets_match_native_reference_configs(selection, tmp_path, monkeypatch):
     summary = (Path(selection.path()) / "summary.json").read_text()
+    panel_name, panel_version = presets.DEFAULT_TEST_PANEL.split("@")
+    panel_summary = (tmp_path / panel_name / panel_version / "summary.json").read_text()
     monkeypatch.setattr(presets, "SELECTION_ROOT", "memory://snowball-calibration")
     (
         StoragePath(presets.SELECTION_ROOT) / "snowball-100k" / presets.DEFAULT_SELECTION_VERSION / "summary.json"
     ).write_text(summary)
+    (StoragePath(presets.SELECTION_ROOT) / panel_name / panel_version / "summary.json").write_text(panel_summary)
     expected = {
-        "speed-short": "01291323",
-        "data-short": "aea96ee0",
-        "speed-medium": "13f69efa",
-        "learning-medium": "cff794ee",
-        "speed-long": "11b234e3",
+        "speed-short": "c5b41166",
+        "data-short": "628bab85",
+        "speed-medium": "3a9adfc0",
+        "learning-medium": "409e180c",
+        "speed-long": "b538134e",
     }
     paths = []
     for name in expected:
