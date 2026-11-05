@@ -464,30 +464,21 @@ def _load_run(path: str, preset: presets.Preset, rates: pa.Table | None, inputs:
         ids = frozenset(table["item"].to_pylist())
         if evaluation.file != scoring.TRAIN_STEM:
             panel_ids[evaluation.name] = ids
-        invariants.extend(_session_invariants(evaluation.name, table, evaluation, preset, expected_ids))
-        prefix = f"eval/{evaluation.name}/all/outcome/" if evaluation.name in named else "eval/all/outcome/"
-        if quality:
-            invariants.append(
-                _grader_errors(
-                    [metrics.get(0 if generating else preset.updates, {})],
-                    prefix,
-                    evaluation.name + "/grader_error_fraction",
-                    answers=table.num_rows,
-                )
-            )
+        sessions = [(evaluation.name, table, 0 if generating else preset.updates)]
         if inputs.init is not None:
             if initial.num_rows and frozenset(initial["item"].to_pylist()) != ids:
                 raise InvalidComparison(f"initial and final panel task IDs differ: {path}")
-            invariants.extend(
-                _session_invariants(evaluation.name + "/initial", initial, evaluation, preset, expected_ids)
-            )
+            sessions.append((evaluation.name + "/initial", initial, 0))
+        prefix = f"eval/{evaluation.name}/all/outcome/" if evaluation.name in named else "eval/all/outcome/"
+        for session_name, session, metric_step in sessions:
+            invariants.extend(_session_invariants(session_name, session, evaluation, preset, expected_ids))
             if quality:
                 invariants.append(
                     _grader_errors(
-                        [metrics.get(0, {})],
+                        [metrics.get(metric_step, {})],
                         prefix,
-                        evaluation.name + "/initial/grader_error_fraction",
-                        answers=initial.num_rows,
+                        session_name + "/grader_error_fraction",
+                        answers=session.num_rows,
                     )
                 )
     if not generating:
