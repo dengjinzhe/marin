@@ -9,24 +9,25 @@ gives what the preset runs, its cost, what it measures and the changes it is for
 
 \b
   speed-short      vLLM engine only: one pass of 512 prompts x 4 replies of 4,096 tokens;
-                   8 H100, about 10 min. Measures engine tokens/s per GPU. For engine
-                   options, kernels and vLLM wheels.
+                   then the 1,500-task greedy test panel. 8 H100, about 15 min. Measures
+                   engine tokens/s per GPU and panel quality. For engine options,
+                   kernels and vLLM wheels. Quality keeps the throughput engine settings.
   speed-medium     10 sync updates, every reply 4,096 tokens; 40 H100, about 40 min. Measures
                    median update time and trainer-vs-engine log-prob mismatch. For trainer
                    speed, weight sync and startup.
   speed-long       20 async updates with staleness 2 and TIS, replies up to 8,192 tokens;
                    40 H100, target 45-75 min. Measures update time and learner/engine
                    tokens/s per GPU. For the async loop, grading and admission speed.
-  learning-medium  25 sync updates, then the 910-task panel; 40 H100, about 2 h. Measures the
+  learning-medium  25 sync updates, then the 1,500-task test panel; 40 H100, about 2 h. Measures the
                    panel score. For loss, estimator, optimizer, schedule, reward shaping,
                    batch shape and --init.
   data-short       4 replies to each of 256 tasks of a new --tasks selection; 8 H100, about
                    15 min. Measures the fraction of tasks with both right and wrong replies,
-                   the only tasks that give RLOO-N a learning signal. For a new task selection.
+                   to screen a new task selection.
   data-medium      learning-medium trained on --tasks instead of the default selection;
                    40 H100, about 2 h. Measures the panel score after training on the new
                    selection. For a new task selection that passed data-short.
-  train-long       the async production loop with checkpoints, panel-100 every 10 updates and
+  train-long       the async production loop with checkpoints, fast_panel every 10 updates and
                    an HF export; 112 H100, or 40 with --layout p40. For release training and
                    for models that later runs load with --init. No verdict.
 
@@ -39,6 +40,9 @@ and prints the final status and report. It exits 0 for PASS or a finished ungate
 1 for FAIL, 2 for INVALID, and 3 when a required verdict is unavailable.
 --baseline NAME@VERSION adds a comparison with earlier finished runs; the verdict uses the
 pinned controls. Status includes each run's latest completed update and saved W&B URL.
+Panel evaluation is seeded and greedy, with natural replies up to EVAL_REPLY_TOKENS (8,192).
+--keep-weights retains a learning/data candidate's final HF export for --init or later evaluation;
+learning/data controls retain theirs automatically. Selections must contain no AI-judged tasks.
 Set WANDB_ENTITY before submission to choose the W&B team; unset uses marin-community.
 --version dev satisfies
 the launcher; Snowball steps use PRESET_REVISION. Guide: docs/recipes/snowball-rl.md.
@@ -50,7 +54,8 @@ Examples, each after `uv run python -m experiments.post_training.snowball_rl`:
   --preset speed-medium --baseline EARLIER_RUN@2026.10.27 --version dev --run --wait
   --preset learning-medium --set trainer.algorithm.advantage_estimator=grpo --version dev --run
   --preset speed-medium --require 'policy/mismatch/staleness0/log_ratio_abs_max<=0' --version dev --run
-  --preset learning-medium --require 'panel-910/aaii_category/coding/mean>=control' --version dev --run
+  --preset learning-medium --require 'test_panel/aaii_category/coding/mean>=control' --version dev --run
+  --preset learning-medium --keep-weights --version dev --run
   --preset data-short --tasks my-selection@2026.11.02 --version dev --run
   --preset train-long --layout p40 --set trainer.max_steps=100 --version dev --run
 """
