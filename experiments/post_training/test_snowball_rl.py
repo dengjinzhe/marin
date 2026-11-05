@@ -36,6 +36,11 @@ def _render(step, path, *, runtime=False):
 
 
 def _native(script, paths):
+    script = (
+        "from pathlib import Path; import skyrl_train; "
+        f"assert Path(skyrl_train.__file__).resolve().is_relative_to({str(presets.REPO_ROOT / 'vendor/skyrl')!r})\n"
+        + script
+    )
     result = subprocess.run(
         skyrl_cpu_command("python", "-c", script, *paths), capture_output=True, text=True, timeout=170
     )
@@ -95,9 +100,63 @@ def test_presets_compose_and_preserve_measurement_contracts(selection, tmp_path,
     paths.append(str(path))
     rows = _native(
         """
-import json, sys
+import asyncio, json, sys
+from types import SimpleNamespace
 from cloud.iris.launch_config import load_launch_config
+from skyrl_train.inference_engines.utils import get_vllm_sampling_params
+from skyrl_train.inference_engines.vllm.utils import apply_openai_sampling
+from skyrl_train.trajectory_runners.model_clients import DirectModelClient
+
+class InferenceService:
+    model_name = "fixture"
+    tokenizer = SimpleNamespace(eos_token_id=99, decode=lambda *args, **kwargs: "answer")
+
+    def __init__(self, overrides, validate):
+        self.overrides, self.validate = overrides, validate
+        self.body = None
+
+    async def tokenize(self, request):
+        return {"tokens": [1, 2]}
+
+    async def chat_completion(self, request):
+        body = request["json"]
+        apply_openai_sampling(body, self.overrides, self.validate)
+        self.body = dict(body)
+        return {"choices": [{
+            "message": {"role": "assistant", "content": "answer"},
+            "token_ids": [3], "finish_reason": "stop",
+            "logprobs": {"content": [{"logprob": -0.1}]} if body.get("logprobs") else None,
+        }]}
+
+async def native_request(parameters, overrides, validate):
+    service = InferenceService(overrides, validate)
+    output = await DirectModelClient(service).generate({
+        "prompts": [[{"role": "user", "content": "question"}]],
+        "chat_completion_params": [{}], "sampling_params": parameters,
+    })
+    assert output["response_ids"] == [[3]]
+    if parameters.get("logprobs") is not None:
+        assert output["response_logprobs"] == [[-0.1]]
+    return {key: service.body.get(key) for key in (
+        "temperature", "max_completion_tokens", "ignore_eos", "seed", "logprobs",
+    )}
+
 configs = [load_launch_config(path) for path in sys.argv[1:]]
+training = next(config for config in configs if config.runtime.training_type is not None)
+parameters = get_vllm_sampling_params(training.skyrl.generator.sampling_params)
+parameters["min_tokens"] = 0
+accepted = asyncio.run(native_request(parameters, {"temperature": 0.7}, True))
+assert accepted["temperature"] == 1.0 and accepted["logprobs"] is True
+for change in ({"min_tokens": 1}, {"temperature": 0.0}):
+    try:
+        asyncio.run(native_request(parameters | change, {"temperature": 1.0}, True))
+    except ValueError:
+        pass
+    else:
+        raise AssertionError(f"invalid native behavior-logprob sampling accepted: {change}")
+external = {"temperature": 0.0, "top_p": 1.0, "top_k": -1, "min_p": 0.0, "logprobs": False}
+apply_openai_sampling(external, {"temperature": 0.7, "top_p": 0.9, "top_k": 8, "min_p": 0.2}, True)
+assert tuple(external[key] for key in ("temperature", "top_p", "top_k", "min_p")) == (0.7, 0.9, 8, 0.2)
 print(json.dumps([{
     "name": config.run.id, "entrypoint": config.runtime.entrypoint,
     "nodes": config.iris.allocation.num_nodes, "eval_interval": config.skyrl.trainer.eval_interval,
@@ -116,6 +175,11 @@ print(json.dumps([{
     "micro": config.skyrl.trainer.micro_train_batch_size_per_gpu,
     "forward_micro": config.skyrl.trainer.micro_forward_batch_size_per_gpu,
     "terminal_eval": [entry.eval_on_train_end for entry in config.skyrl.trainer.callbacks if entry.type == "evaluation"],
+    "wire": asyncio.run(native_request(
+        get_vllm_sampling_params(config.skyrl.generator.eval_sampling_params),
+        {"temperature": 0.7, "top_p": 0.9, "top_k": 8, "min_p": 0.2},
+        config.runtime.training_type is not None,
+    )) if config.inputs.validation_data else None,
 } for config in configs]))
 """,
         paths,
@@ -136,6 +200,19 @@ print(json.dumps([{
             assert not row["validation"] and not row["export_hf"]
         if row["fixed"]:
             assert not row["overlong_filtering"], row
+        if row["wire"] is not None:
+            if row["training"]:
+                assert row["wire"] == {
+                    "temperature": 0.0,
+                    "max_completion_tokens": 8192,
+                    "ignore_eos": False,
+                    "seed": presets.SEED,
+                    "logprobs": None,
+                }
+            else:
+                assert row["wire"]["temperature"] == 1.0
+                assert row["wire"]["max_completion_tokens"] == (4096 if "speed-short-" in name else 8192)
+                assert row["wire"]["ignore_eos"] == ("speed-short-" in name)
         if row["training"] and row["validation"]:
             assert "evaluation" in row["callbacks"], row
             if "best_checkpoint" in row["callbacks"]:

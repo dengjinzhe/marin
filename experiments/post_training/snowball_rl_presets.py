@@ -66,6 +66,8 @@ MODEL_URI = "s3://marin-us-east-02a/models/open-athena--Grug-67B-A2B-Datakit-SFT
 SELECTION_ROOT = str(StoragePath(CANONICAL_ARTIFACT_ROOT) / SELECTION_PREFIX)
 DEFAULT_SELECTION_VERSION = "2026.11.04"
 JUDGE_KEY = "TOGETHER_API_KEY"
+EVAL_REPLY_TOKENS = 8192
+VLLM_ATTENTION_HELPER_SHA256 = "08cdc141ebf05c4773b7328864549e93dd4600ba4e172a404c1b0de56ab2a940"
 GRAFANA_URL = "https://grafana.oa.dev/d/marin-rl-runs/rl-post-training"
 GRAFANA_SPEED_PANELS = (
     ("response_tokens", 3),
@@ -231,15 +233,20 @@ class PanelEvaluator:
                 tasks, evaluation.file, evaluation.sample, config["trainer"]["seed"], local_only=evaluation.local_only
             )
         config["trainer"].update(eval_num_prompts=None, dump_eval_results=True)
-        config["generator"].update(
-            eval_n_samples_per_prompt=evaluation.answers,
-            eval_sampling_params={
-                "temperature": 0.0 if evaluation.answers == 1 else 1.0,
-                "top_p": 1.0,
-                "logprobs": None if config["trainer"]["algorithm"]["off_policy_correction"] == "tis" else 0,
-                "ignore_eos": config["generator"]["sampling_params"]["ignore_eos"],
-            },
-        )
+        sampling = {
+            "temperature": 0.0 if evaluation.answers == 1 else 1.0,
+            "top_p": 1.0,
+            "logprobs": None if config["trainer"]["algorithm"]["off_policy_correction"] == "tis" else 0,
+            "ignore_eos": config["generator"]["sampling_params"]["ignore_eos"],
+        }
+        if evaluation.answers == 1:
+            sampling.update(
+                seed=config["trainer"]["seed"],
+                logprobs=None,
+                ignore_eos=False,
+                max_generate_length=EVAL_REPLY_TOKENS,
+            )
+        config["generator"].update(eval_n_samples_per_prompt=evaluation.answers, eval_sampling_params=sampling)
         return (ArtifactDataSource(tasks, relative_path=f"{evaluation.file}.parquet"),)
 
 

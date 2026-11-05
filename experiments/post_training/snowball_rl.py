@@ -167,7 +167,7 @@ def training_config(
             "training_metrics": True,
             "rollout_spans": True,
             "policy_train_spans": True,
-            "algorithm": deepcopy(dict(recipe.estimator)),
+            "algorithm": {**deepcopy(dict(recipe.estimator)), "batch_invariant": True},
             "policy": {"optimizer_config": deepcopy(dict(recipe.optimizer))},
             "rollout_buffer": {
                 "max_staleness_steps": recipe.staleness,
@@ -182,7 +182,8 @@ def training_config(
         "generator": {
             "backend": "vllm",
             "model_dtype": "bfloat16",
-            "vllm_attention_backend": "FLASH_ATTN",
+            "vllm_attention_backend": "TRITON_ATTN",
+            "required_vllm_attention_helper_sha256": presets.VLLM_ATTENTION_HELPER_SHA256,
             "run_engines_locally": True,
             "weight_sync_backend": "nccl",
             "weight_sync_pause": {"mode": "keep", "clear_cache": True},
@@ -191,7 +192,7 @@ def training_config(
             "gpu_memory_utilization": 0.75,
             "max_num_seqs": 1024,
             "max_num_batched_tokens": 8192,
-            "enable_prefix_caching": True,
+            "enable_prefix_caching": False,
             "enable_chunked_prefill": True,
             "enforce_eager": False,
             "enable_http_endpoint": False,

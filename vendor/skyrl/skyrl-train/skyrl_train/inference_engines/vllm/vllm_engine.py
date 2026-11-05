@@ -1941,12 +1941,10 @@ class AsyncVLLMInferenceEngine(InferenceEngineInterface):
         body = request_payload.get("json", {})
         headers = request_payload.get("headers", {})
         request_id = headers.get("x-request-id") or uuid4().hex
-        exact_prompt_token_ids = body.pop(EXACT_PROMPT_TOKEN_IDS_KEY, None)
 
-        # Apply configured sampling params from generator config.
-        # Harbor requests may include their own sampling params; we override
-        # with the SkyRL generator config so rollout exploration is consistent.
+        # Native rendered requests carry their resolved sampling parameters.
         apply_openai_sampling(body, self._openai_sampling_params, self._validate_rollout_logprob_sampling)
+        exact_prompt_token_ids = body.pop(EXACT_PROMPT_TOKEN_IDS_KEY, None)
 
         # 1. Build request
         try:
@@ -2077,9 +2075,9 @@ class AsyncVLLMInferenceEngine(InferenceEngineInterface):
         """
         body = request_payload.get("json", {})
         headers = request_payload.get("headers", {})
-        exact_prompt_token_ids = body.pop(EXACT_PROMPT_TOKEN_IDS_KEY, None)
 
         apply_openai_sampling(body, self._openai_sampling_params, self._validate_rollout_logprob_sampling)
+        exact_prompt_token_ids = body.pop(EXACT_PROMPT_TOKEN_IDS_KEY, None)
         body["stream"] = True
         body["return_token_ids"] = True  # force vLLM to emit per-chunk token_ids
 
