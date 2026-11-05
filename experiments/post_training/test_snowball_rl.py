@@ -227,6 +227,13 @@ print(json.dumps([{
         paths,
     )
     assert len(rows) == len(paths)
+    greedy_wire = {
+        "temperature": 0.0,
+        "max_completion_tokens": 8192,
+        "ignore_eos": False,
+        "seed": presets.SEED,
+        "logprobs": None,
+    }
     for row in rows:
         assert row["tools"] == "hermes"
         assert row["team"] == ("marin-community" if "speed-short-" in row["name"] else "test-team")
@@ -238,13 +245,7 @@ print(json.dumps([{
             expected = 2048 if "speed-short-" in name else 1024
             assert row["admission"] == expected, row
         if "speed-short-" in name:
-            assert row["quality_wire"] == {
-                "temperature": 0.0,
-                "max_completion_tokens": 8192,
-                "ignore_eos": False,
-                "seed": presets.SEED,
-                "logprobs": None,
-            }
+            assert row["quality_wire"] == greedy_wire
         if "train-long-" in name:
             assert row["terminal_eval"] == [row["steps"] % 10 != 0], row
         if "learning-medium-" in name or "/control/learning-medium-" in name:
@@ -257,13 +258,7 @@ print(json.dumps([{
             assert not row["overlong_filtering"], row
         if row["wire"] is not None:
             if row["training"]:
-                assert row["wire"] == {
-                    "temperature": 0.0,
-                    "max_completion_tokens": 8192,
-                    "ignore_eos": False,
-                    "seed": presets.SEED,
-                    "logprobs": None,
-                }
+                assert row["wire"] == greedy_wire
             else:
                 assert row["wire"]["temperature"] == 1.0
                 assert row["wire"]["max_completion_tokens"] == (4096 if "speed-short-" in name else 8192)

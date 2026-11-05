@@ -473,20 +473,20 @@ def build_run(
         if grader_counts.get(GraderKind.REMOTE_JUDGE, 0):
             raise click.BadParameter("Snowball evaluation selections must contain no AI-judge-graded tasks")
         evaluator = presets.EVALUATORS[evaluation.harness]
+        profile_config = config if index == 0 else deepcopy(config)
+        sources = evaluator.configure(evaluation, profile_config, evaluation_tasks)
         if index == 0:
-            validation_data = evaluator.configure(evaluation, config, evaluation_tasks)
-            expected_tasks = presets.evaluation_answer_count(evaluation, evaluation_tasks) // evaluation.answers
+            validation_data = sources
+            answer_count = presets.evaluation_answer_count(evaluation, evaluation_tasks)
+            expected_tasks = answer_count // evaluation.answers
+            if generating:
+                config["trajectory_runner"]["max_concurrent_tasks"] = answer_count
         else:
-            profile_config = deepcopy(config)
-            evaluation_data.append((evaluation.name, evaluator.configure(evaluation, profile_config, evaluation_tasks)))
+            evaluation_data.append((evaluation.name, sources))
             profiles[evaluation.name] = {
                 "sampling_params": profile_config["generator"]["eval_sampling_params"],
                 "n_samples_per_prompt": profile_config["generator"]["eval_n_samples_per_prompt"],
             }
-        if generating and index == 0:
-            config["trajectory_runner"]["max_concurrent_tasks"] = presets.evaluation_answer_count(
-                evaluation, evaluation_tasks
-            )
     if generating and profiles:
         config["trainer"]["callbacks"] = [{"type": "evaluation", "additional_evaluations": profiles}]
     if not generating:

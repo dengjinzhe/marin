@@ -118,21 +118,6 @@ def recorded_runs(selection, tmp_path, monkeypatch):
     pq.write_table(
         pa.Table.from_pylist([{**rows[i % len(rows)], "task_id": f"task-{i}"} for i in range(1500)]), panel_rates
     )
-    panel_summary = json.loads((test_panel / "summary.json").read_text())
-    _json(
-        test_panel / "summary.json",
-        panel_summary
-        | {
-            "recipe": {
-                "pass_rates": {
-                    "uri": str(panel_rates),
-                    "rows": 1500,
-                    "model_revision": revision,
-                    "version": "2026.11.04.2",
-                }
-            }
-        },
-    )
 
     def write(
         preset,

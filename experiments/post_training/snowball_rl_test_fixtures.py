@@ -10,6 +10,7 @@ from rigging.provenance import Provenance
 
 from experiments.post_training import snowball_rl as snowball
 from experiments.post_training import snowball_rl_presets as presets
+from experiments.post_training import snowball_rl_scoring as scoring
 
 
 @pytest.fixture
@@ -44,6 +45,14 @@ def selection(tmp_path, monkeypatch):
                 "validation_rows": 100,
                 "full_validation_rows": 1500,
                 "grader_kind_counts": {"validation": {}, "full_validation": {}},
+                "recipe": {
+                    "pass_rates": {
+                        "uri": str(tmp_path / "test-panel-rates" / scoring.PASS_RATES_FILENAME),
+                        "rows": 1500,
+                        "model_revision": presets.MODEL_REVISION,
+                        "version": panel_version,
+                    }
+                },
             }
         )
     )
