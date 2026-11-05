@@ -166,10 +166,11 @@ Reports use the caller's namespace under `MARIN_PREFIX`; controls are read-only.
 Host status lists changed RL paths, including uncommitted edits, against the control
 commit, or explains missing git metadata. This list does not affect the verdict.
 
-`snowball_pass_rates` answers each panel task eight times at temperature 1. Its artifact
-pins the initializer revision and records task IDs, passed answers, scored samples and
-mean normalized scores, excluding grading errors. Reports join easy (> 0.7), learnable (0.1–0.7) and hard
-(< 0.1) pass-rate bands for reporting only. Refresh when the initializer revision changes.
+The test-panel recipe pins its qualified eight-answer, temperature-1 initializer pass-rate
+artifact. Reports check its task IDs against the run's recorded panel, then join easy (> 0.7),
+learnable (0.1–0.7) and hard (< 0.1) bands and reference initializer scores for reporting only.
+Refresh that reference when the initializer revision changes. The standalone
+`snowball_pass_rates` command measures the 910-task development panel.
 
 ## Tasks and evaluation
 

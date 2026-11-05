@@ -196,18 +196,13 @@ def read_pass_rates(path: str) -> pa.Table:
         table = pq.read_table(stream)
     rows = table.to_pylist()
     ids = {row["task_id"] for row in rows}
-    expected = set(task_manifest(StoragePath(presets.default_selection().path())))
-    if (
-        ids != expected
-        or len(rows) != len(ids)
-        or any(
-            row["model_revision"] != presets.MODEL_REVISION
-            or not 1 <= row["samples"] <= PASS_RATE_EVALUATION.answers
-            or not 0 <= row["passed"] <= row["samples"]
-            or not math.isfinite(row["mean_score"])
-            or not 0 <= row["mean_score"] <= 1
-            for row in rows
-        )
+    if len(rows) != len(ids) or any(
+        row["model_revision"] != presets.MODEL_REVISION
+        or not 1 <= row["samples"] <= PASS_RATE_EVALUATION.answers
+        or not 0 <= row["passed"] <= row["samples"]
+        or not math.isfinite(row["mean_score"])
+        or not 0 <= row["mean_score"] <= 1
+        for row in rows
     ):
-        raise InvalidComparison("pass-rate artifact differs from the pinned initializer or development panel")
+        raise InvalidComparison("pass-rate artifact has invalid initializer scores, samples or task IDs")
     return table

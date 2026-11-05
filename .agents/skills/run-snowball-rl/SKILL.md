@@ -128,6 +128,8 @@ window, or a panel slice. It refuses other keys before launch.
 - The default evaluation artifact is `snowball-test-panel@2026.11.04.2`: 1,500 full tasks and a
   100-task fast subset, with source parts recorded in its recipe and manifest. learning-medium and
   data-medium use the full panel; train-long uses the fast subset.
+  Its recipe pins the initializer pass-rate artifact used for difficulty and reference-score rows;
+  the standalone `snowball_pass_rates` command measures the development panel.
 - `--preset learning-medium --init NAME@VERSION`
   evaluates the initial weights at update 0 and the trained weights after update 25; the report's
   "initial weights" Breakdown table holds the update-0 scores.

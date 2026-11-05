@@ -10,7 +10,7 @@ with a new --require or --baseline, or to check calibration by scoring a control
 
 \b
 Examples, each after `uv run python -m experiments.post_training.snowball_rl_gate`:
-  --preset learning-medium --candidate RUN_NAME --require 'panel-910/aaii_category/coding/mean>=control'
+  --preset learning-medium --candidate RUN_NAME --require 'test_panel/aaii_category/coding/mean>=control'
   --preset speed-medium --leave-out r0
   --preset learning-medium --candidate RUN_NAME --baseline EARLIER_RUN@2026.10.27
 """
@@ -453,6 +453,9 @@ def _load_run(path: str, preset: presets.Preset, rates: pa.Table | None, inputs:
     scores, initial_scores, panel_ids = [scoring.EVAL_SCORE_SCHEMA.empty_table()], [], {}
     for evaluation in preset.evaluations:
         expected_ids = _evaluation_ids(named.get(evaluation.name, launch["inputs"]["validation_data"]))
+        if rates is not None and _gated(evaluation, preset) and evaluation.file != scoring.TRAIN_STEM:
+            if frozenset(rates["task_id"].to_pylist()) != expected_ids:
+                raise InvalidComparison("pass-rate panel differs from the run's recorded evaluation tasks")
         table = scoring.panel_scores(evaluation, path, answers)
         initial = table.filter(pc.equal(table["step"], 0))
         table = table.filter(pc.equal(table["step"], -1 if generating else preset.updates))
@@ -823,10 +826,26 @@ def _control_path(preset: presets.Preset, pin: ControlPin, index: int) -> str:
 
 
 def _pass_rates_path(preset: presets.Preset) -> str | None:
-    if not any(evaluation.source == "default" and _gated(evaluation, preset) for evaluation in preset.evaluations):
+    if preset.focus == presets.Focus.SPEED:
         return None
-    root = StoragePath(presets.artifact_prefix(preset.recipe.layout.cluster))
-    return str(root / scoring.PASS_RATES_NAME / scoring.PASS_RATE_REVISION)
+    for evaluation in preset.evaluations:
+        if not _gated(evaluation, preset) or evaluation.file == scoring.TRAIN_STEM:
+            continue
+        if evaluation.source == "default":
+            root = StoragePath(presets.artifact_prefix(preset.recipe.layout.cluster))
+            return str(root / scoring.PASS_RATES_NAME / scoring.PASS_RATE_REVISION)
+        default = presets.default_selection()
+        summary = presets.selection_summary(evaluation.tasks(default, default))
+        reference = summary["recipe"]["pass_rates"]
+        path = StoragePath(reference["uri"])
+        if (
+            reference["model_revision"] != presets.MODEL_REVISION
+            or reference["rows"] != summary["full_validation_rows"]
+            or path.name != scoring.PASS_RATES_FILENAME
+        ):
+            raise InvalidComparison("panel pass-rate reference differs from its initializer or declared cohort")
+        return str(path.parent)
+    return None
 
 
 def _gate_artifact(

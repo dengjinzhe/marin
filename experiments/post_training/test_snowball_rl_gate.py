@@ -113,6 +113,26 @@ def recorded_runs(selection, tmp_path, monkeypatch):
         for i in range(910)
     ]
     pq.write_table(pa.Table.from_pylist(rows), rates)
+    panel_rates = tmp_path / "test-panel-rates" / scoring.PASS_RATES_FILENAME
+    panel_rates.parent.mkdir()
+    pq.write_table(
+        pa.Table.from_pylist([{**rows[i % len(rows)], "task_id": f"task-{i}"} for i in range(1500)]), panel_rates
+    )
+    panel_summary = json.loads((test_panel / "summary.json").read_text())
+    _json(
+        test_panel / "summary.json",
+        panel_summary
+        | {
+            "recipe": {
+                "pass_rates": {
+                    "uri": str(panel_rates),
+                    "rows": 1500,
+                    "model_revision": revision,
+                    "version": "2026.11.04.2",
+                }
+            }
+        },
+    )
 
     def write(
         preset,
@@ -750,15 +770,17 @@ def test_rescore_reports_candidate_and_control_contracts(
 
 
 def test_detail_rows_use_table_counts_and_initializer_scores(recorded_runs, selection, tmp_path):
-    panel = Path(selection.path())
+    panel = Path(presets.selection_artifact(presets.DEFAULT_TEST_PANEL).path())
     summary = json.loads((panel / "summary.json").read_text())
+    summary["recipe"]["pass_rates"]["rows"] = 6
     _json(panel / "summary.json", summary | {"full_validation_rows": 6})
     tasks = [
         {"task_id": f"task-{i}", "family": "ab"[i // 3], "aaii_category": "xy"[i // 3], "agentic": bool(i % 2)}
         for i in range(6)
     ]
     pq.write_table(pa.Table.from_pylist(tasks), panel / presets.TASK_MANIFEST_FILENAME)
-    path = next(tmp_path.glob("rl-data/snowball-pass-rates/*/*/pass_rates.parquet"))
+    _task_parquet(panel / "full_validation.parquet", [row["task_id"] for row in tasks])
+    path = Path(summary["recipe"]["pass_rates"]["uri"])
     pq.write_table(pq.read_table(path).slice(0, 6), path)
     for i in range(4):
         pin = gate.CONTROLS["learning-medium"][0]
@@ -784,7 +806,7 @@ def test_detail_rows_use_table_counts_and_initializer_scores(recorded_runs, sele
     rows = {row["metric"]: row for row in report["reported"]}
     for dimension, category in (("aaii_category", "x"), ("family", "a")):
         for band, value, initial in (("hard", 0.2, 0.05), ("learnable", 0.4, 0.5), ("easy", 0.8, 0.95)):
-            cell = rows[f"panel-910/{dimension}/{category}/difficulty/{band}/mean"]
+            cell = rows[f"test_panel/{dimension}/{category}/difficulty/{band}/mean"]
             assert tuple(
                 cell[key] for key in ("run", "initializer", "tasks", "control_min", "control_max")
             ) == pytest.approx((value, initial, 1, 0.49, 0.52))
@@ -792,25 +814,25 @@ def test_detail_rows_use_table_counts_and_initializer_scores(recorded_runs, sele
                 t.ppf(1 - 0.025 / 6, 3) * math.sqrt(5 / 3) * 0.01 * math.sqrt(1.25)
             )
             assert cell["change"] == ("better" if band == "easy" else "worse")
-    agentic = rows["panel-910/agentic/true/mean"]
+    agentic = rows["test_panel/agentic/true/mean"]
     assert (agentic["run"], agentic["initializer"], agentic["tasks"]) == pytest.approx((1.4 / 3, 0.5, 3))
-    assert rows["panel-910/aaii_category/x/mean"]["run"] == pytest.approx(1.4 / 3)
+    assert rows["test_panel/aaii_category/x/mean"]["run"] == pytest.approx(1.4 / 3)
     assert agentic["tolerance"] == pytest.approx(t.ppf(1 - 0.025 / 5, 3) * math.sqrt(5 / 3) * 0.01 * math.sqrt(1.25))
     # A declared metric keeps k = 1 inside a breakdown table; constant controls leave a detail row unavailable.
-    assert rows["panel-910/mean"]["tolerance"] == pytest.approx(
+    assert rows["test_panel/mean"]["tolerance"] == pytest.approx(
         t.ppf(0.975, 3) * math.sqrt(5 / 3) * 0.01 * math.sqrt(1.25)
     )
-    assert rows["panel-910/scored_fraction"]["change"] == "unavailable"
+    assert rows["test_panel/scored_fraction"]["change"] == "unavailable"
     recorded_runs("learning-medium", "users/test/initial", answers=answers, initial_score=0.3)
     initial = {row["metric"]: row for row in rescore("learning-medium", "--candidate", "users/test/initial")["reported"]}
-    for key in ("panel-910/agentic/true/mean", "panel-910/family/a/mean", "panel-910/difficulty/hard/mean"):
+    for key in ("test_panel/agentic/true/mean", "test_panel/family/a/mean", "test_panel/difficulty/hard/mean"):
         assert initial[key]["tolerance"] == pytest.approx(rows[key]["tolerance"])
-    assert initial["panel-910/mean/initial"]["change"] == "unavailable"
+    assert initial["test_panel/mean/initial"]["change"] == "unavailable"
     assert (report["verdict"], report["label"]) == ("pass", "no change")
     assert rows["generate/std_num_tokens"]["change"] == "better"
     assert rows["reward/domain/shared/avg_raw_reward"]["change"] == "better"
     assert not {"reward/domain/candidate-only/avg_raw_reward", "async/rejected_rate"} & rows.keys()
-    assert not {"panel-910/family_mean", "panel-910/mixed_fraction", "panel-910/all_wrong_fraction"} & rows.keys()
+    assert not {"test_panel/family_mean", "test_panel/mixed_fraction", "test_panel/all_wrong_fraction"} & rows.keys()
     partial = [
         _answer(f"task-{i}", value, error="Unavailable" if i == 0 else None)
         for i, value in enumerate((0.2, 0.4, 0.8, 0.1, 0.5, 0.9))
@@ -822,11 +844,16 @@ def test_detail_rows_use_table_counts_and_initializer_scores(recorded_runs, sele
         for path in (first, second)
     )
     multi = run(gate.gate_step(presets.PRESETS["learning-medium"], candidates, inputs=gate.GateInputs()))[0]
-    category = next(row for row in multi.reported if row.metric == "panel-910/aaii_category/x/mean")
+    category = next(row for row in multi.reported if row.metric == "test_panel/aaii_category/x/mean")
     assert category.tasks is None and category.initializer == pytest.approx(0.6125)
     assert category.run == pytest.approx(8 / 15)
     markdown = Path(report["report"]).with_suffix(".md").read_text()
-    assert "## Breakdown" in markdown and "### panel-910: aaii_category x difficulty" in markdown
+    assert "## Breakdown" in markdown and "### test_panel: aaii_category x difficulty" in markdown
+    wrong_rates = pq.read_table(path).to_pylist()
+    wrong_rates[0]["task_id"] = "different-panel"
+    pq.write_table(pa.Table.from_pylist(wrong_rates), path)
+    with pytest.raises(scoring.InvalidComparison, match="pass-rate panel"):
+        gate.validate_candidate(presets.PRESETS["learning-medium"], ["test_panel/mean>=control"], control=False)
 
 
 def test_requirement_preflight_accepts_only_keys_the_gate_computes(recorded_runs):
@@ -836,16 +863,16 @@ def test_requirement_preflight_accepts_only_keys_the_gate_computes(recorded_runs
     gate.validate_candidate(speed, ["speed/update_seconds<=120", VLLM + "<=control"], control=False)
     gate.validate_candidate(
         learning,
-        ["panel-910/aaii_category/coding/mean>=control", "panel-910/family/large/difficulty/hard/mean>=0"],
+        ["test_panel/aaii_category/coding/mean>=control", "test_panel/family/large/difficulty/hard/mean>=0"],
         control=False,
     )
     for preset, requirement, kwargs in (
         (presets.PRESETS["speed-short"], "typo>=0", {}),
-        (learning, "panel-910/aaii_category/codng/mean>=control", {}),
+        (learning, "test_panel/aaii_category/codng/mean>=control", {}),
         # Every fixture task is non-agentic, so the panel has no agentic split.
-        (learning, "panel-910/agentic/false/mean>=0", {}),
-        (presets.PRESETS["train-long"], "panel-910/mean>=0", {}),
-        (learning, "panel-910/mean>=0", {"control": True}),
+        (learning, "test_panel/agentic/false/mean>=0", {}),
+        (presets.PRESETS["train-long"], "test_panel/mean>=0", {}),
+        (learning, "test_panel/mean>=0", {"control": True}),
         (learning, "invalid", {}),
     ):
         with pytest.raises(click.BadParameter):
@@ -904,9 +931,9 @@ def test_requirements_enforce_each_replicate_and_calibrate_added_guards(recorded
         "--candidate",
         "users/test/repeated",
         "--require",
-        "panel-910/family_mean>=control",
+        "test_panel/family_mean>=control",
         "--require",
-        "panel-910/family_mean>=control",
+        "test_panel/family_mean>=control",
     )
     assert duplicate["verdict"] == "fail" and len(duplicate["guards"]) == 1
 
@@ -1002,7 +1029,7 @@ def test_built_gate_and_rescore_share_inputs_and_status(recorded_runs, tmp_path,
         expected = (
             algorithm | {"trainer.policy.optimizer_config.lr": 1e-6},
             None,
-            "users/test/initializer@2026.10.27",
+            f"{init.name}@{init.version}",
             [pytest.approx(0.295)],
         )
     else:
@@ -1036,7 +1063,7 @@ def test_built_gate_and_rescore_share_inputs_and_status(recorded_runs, tmp_path,
     assert all(key in markdown for key in timers)
     assert rescore(preset, "--candidate", built.runs[0].name)["run"] == report["run"]
     settings = {key: json.loads(value) for key, _, value in (item.partition("=") for item in report["run"]["settings"])}
-    gains = [row["run"] for row in report["reported"] if row["metric"] == "panel-910/mean/gain"]
+    gains = [row["run"] for row in report["reported"] if row["metric"] == "test_panel/mean/gain"]
     assert (settings, report["run"]["tasks"], report["run"]["init"], gains) == expected
     assert [(row["name"], row["holds"]) for row in report["invariants"] if row["name"].startswith("require/")] == [
         ("require/" + REQUIREMENT.split("<=")[0], True)
