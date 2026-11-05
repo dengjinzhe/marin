@@ -142,6 +142,7 @@ class EvalOnlyEntrypoint(BasePPOExp):
                         cfg=profile_cfg,
                         global_step=None,
                         tokenizer=self.tokenizer,
+                        val_set_name=name,
                         trajectory_sink=trajectory_sink,
                     )
                     results.update({f"eval/{name}/{key.removeprefix('eval/')}": value for key, value in profile_results.items()})
