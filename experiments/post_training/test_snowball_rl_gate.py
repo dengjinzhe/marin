@@ -1016,6 +1016,8 @@ def test_panel_scores_join_permuted_answers_and_aggregate_tasks(tmp_path):
         _answer("mixed", 1),
         _answer("mixed", None, status="error", error="TimeoutError"),
         _answer("stem", 0),
+        _answer("mixed", None, status="error"),
+        {key: value for key, value in _answer("mixed", 1).items() if key != "verification"},
     ]
     families = {
         "mixed": ("structural", "format"),
@@ -1027,15 +1029,36 @@ def test_panel_scores_join_permuted_answers_and_aggregate_tasks(tmp_path):
     ]
     (tmp_path / "selection").mkdir()
     pq.write_table(pa.Table.from_pylist(manifest), tmp_path / "selection" / presets.TASK_MANIFEST_FILENAME)
+    quality = tmp_path / "quality"
+    quality.mkdir()
+    pq.write_table(
+        pa.Table.from_pylist([{"task_id": "heldout", "family": "general", "aaii_category": "general"}]),
+        quality / presets.TASK_MANIFEST_FILENAME,
+    )
     _json(
         tmp_path / "resolved-launch.yaml",
-        {"config": {"inputs": {"validation_data": [{"uri": str(tmp_path / "selection")}]}}},
+        {
+            "config": {
+                "inputs": {
+                    "validation_data": [{"uri": str(tmp_path / "selection")}],
+                    "evaluation_data": {"test_panel": [{"uri": str(quality)}]},
+                }
+            }
+        },
     )
     for session in ("global_step_25_evals", "eval_only"):
         directory = tmp_path / "exports/dumped_evals" / session
         directory.mkdir(parents=True)
         (directory / "panel.jsonl").write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in answers) + "\n")
         (directory / "aggregated_results.jsonl").write_text('{"avg_score": 0.5}\n')
+    directory = tmp_path / "exports/test_panel/dumped_evals/eval_only"
+    directory.mkdir(parents=True)
+    (directory / "quality.jsonl").write_text(json.dumps(_answer("heldout", 0.75)) + "\n")
+    quality_scores = scoring.panel_scores(presets.EVALUATIONS["test_panel"], str(tmp_path))
+    assert [(row["item"], row["family"], row["step"]) for row in quality_scores.to_pylist()] == [
+        ("heldout", "general", -1)
+    ]
+    assert scoring.evaluation_statistics(quality_scores)["test_panel/family_mean"] == 0.75
     scores = scoring.panel_scores(presets.EVALUATIONS["panel-100"], str(tmp_path))
     final = [row for row in scores.to_pylist() if row["step"] == 25]
     assert [(row["item"], row["attempt"], row["scored"], row["score"]) for row in final] == [
@@ -1044,6 +1067,8 @@ def test_panel_scores_join_permuted_answers_and_aggregate_tasks(tmp_path):
         ("mixed", 1, True, 1.0),
         ("mixed", 2, False, 0.0),
         ("stem", 0, True, 0.0),
+        ("mixed", 3, False, 0.0),
+        ("mixed", 4, False, 0.0),
     ]
     statistics = scoring.evaluation_statistics(pa.Table.from_pylist(final, schema=scores.schema))
     expected = {
@@ -1053,7 +1078,7 @@ def test_panel_scores_join_permuted_answers_and_aggregate_tasks(tmp_path):
         "all_right_fraction": 0,
         "all_wrong_fraction": 2 / 3,
     }
-    expected |= {"scored_fraction": 0.8, "aaii_category/format/mean": 0.5}
+    expected |= {"scored_fraction": 4 / 7, "aaii_category/format/mean": 0.5}
     assert {key: statistics["panel-100/" + key] for key in expected} == pytest.approx(expected)
 
 
