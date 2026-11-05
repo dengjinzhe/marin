@@ -455,7 +455,7 @@ def _load_run(path: str, preset: presets.Preset, rates: pa.Table | None, inputs:
         expected_ids = _evaluation_ids(named.get(evaluation.name, launch["inputs"]["validation_data"]))
         if rates is not None and _gated(evaluation, preset) and evaluation.file != scoring.TRAIN_STEM:
             if frozenset(rates["task_id"].to_pylist()) != expected_ids:
-                raise InvalidComparison("pass-rate panel differs from the run's recorded evaluation tasks")
+                raise InvalidComparison("pass-rate panel task IDs differ from the run's recorded evaluation tasks")
         table = scoring.panel_scores(evaluation, path, answers)
         initial = table.filter(pc.equal(table["step"], 0))
         table = table.filter(pc.equal(table["step"], -1 if generating else preset.updates))
