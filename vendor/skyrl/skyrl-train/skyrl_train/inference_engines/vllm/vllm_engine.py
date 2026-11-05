@@ -65,7 +65,7 @@ from skyrl_train.inference_engines.base import (
     request_id_for_session,
 )
 from skyrl_train.inference_engines.response_topk import select_response_topk
-from skyrl_train.inference_engines.chat_continuation import EXACT_PROMPT_TOKEN_IDS_KEY
+from skyrl_train.inference_engines.chat_continuation import EXACT_PROMPT_TOKEN_IDS_KEY, NATIVE_SAMPLING_KEY
 from marinskyrl.inference_placement import InferenceWorkerPlacement
 from skyrl_train.inference_engines.placement import inference_worker_placement
 from skyrl_train.inference_engines.vllm.numa import set_async_worker_numa_affinity
@@ -1945,6 +1945,7 @@ class AsyncVLLMInferenceEngine(InferenceEngineInterface):
         # Native rendered requests carry their resolved sampling parameters.
         apply_openai_sampling(body, self._openai_sampling_params, self._validate_rollout_logprob_sampling)
         exact_prompt_token_ids = body.pop(EXACT_PROMPT_TOKEN_IDS_KEY, None)
+        body.pop(NATIVE_SAMPLING_KEY, None)
 
         # 1. Build request
         try:
@@ -2078,6 +2079,7 @@ class AsyncVLLMInferenceEngine(InferenceEngineInterface):
 
         apply_openai_sampling(body, self._openai_sampling_params, self._validate_rollout_logprob_sampling)
         exact_prompt_token_ids = body.pop(EXACT_PROMPT_TOKEN_IDS_KEY, None)
+        body.pop(NATIVE_SAMPLING_KEY, None)
         body["stream"] = True
         body["return_token_ids"] = True  # force vLLM to emit per-chunk token_ids
 

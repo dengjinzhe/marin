@@ -4,6 +4,7 @@ from copy import deepcopy
 from typing import Any, Awaitable, Callable
 
 EXACT_PROMPT_TOKEN_IDS_KEY = "_skyrl_exact_prompt_token_ids"
+NATIVE_SAMPLING_KEY = "_skyrl_native_sampling"
 CHAT_TOKENIZE_FIELDS = {
     "model",
     "messages",

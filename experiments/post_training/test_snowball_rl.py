@@ -112,7 +112,14 @@ from types import SimpleNamespace
 from cloud.iris.launch_config import load_launch_config
 from skyrl_train.inference_engines.utils import get_vllm_sampling_params
 from skyrl_train.inference_engines.vllm.utils import apply_openai_sampling
+from skyrl_train.inference_engines.inference_engine_client import AccumulatedResponse, _prepare_retry_request
+from skyrl_train.inference_engines.chat_continuation import NATIVE_SAMPLING_KEY
 from skyrl_train.trajectory_runners.model_clients import DirectModelClient
+
+continuations = (
+    AccumulatedResponse(),
+    AccumulatedResponse(content="partial", token_ids=[3], completion_tokens=1, route_prompt_ids=[1, 2]),
+)
 
 class InferenceService:
     model_name = "fixture"
@@ -120,15 +127,21 @@ class InferenceService:
 
     def __init__(self, overrides, validate):
         self.overrides, self.validate = overrides, validate
-        self.body = None
 
     async def tokenize(self, request):
         return {"tokens": [1, 2]}
 
     async def chat_completion(self, request):
-        body = request["json"]
-        apply_openai_sampling(body, self.overrides, self.validate)
-        self.body = dict(body)
+        original = request["json"]
+        for accumulated in continuations:
+            body = _prepare_retry_request(
+                original, accumulated, "assistant", original["max_completion_tokens"], "max_completion_tokens"
+            )
+            apply_openai_sampling(body, self.overrides, self.validate)
+            assert body["temperature"] == original["temperature"]
+            assert body["max_completion_tokens"] == original["max_completion_tokens"] - accumulated.completion_tokens
+        self.body = dict(original)
+        apply_openai_sampling(self.body, self.overrides, self.validate)
         return {"choices": [{
             "message": {"role": "assistant", "content": "answer"},
             "token_ids": [3], "finish_reason": "stop",
@@ -161,9 +174,18 @@ for change in ({"min_tokens": 1}, {"temperature": 0.0}):
         pass
     else:
         raise AssertionError(f"invalid native behavior-logprob sampling accepted: {change}")
-external = {"temperature": 0.0, "top_p": 1.0, "top_k": -1, "min_p": 0.0, "logprobs": False}
-apply_openai_sampling(external, {"temperature": 0.7, "top_p": 0.9, "top_k": 8, "min_p": 0.2}, True)
-assert tuple(external[key] for key in ("temperature", "top_p", "top_k", "min_p")) == (0.7, 0.9, 8, 0.2)
+external = {
+    "messages": [{"role": "user", "content": "question"}], "temperature": 0.0,
+    "top_p": 1.0, "top_k": -1, "min_p": 0.0, "logprobs": False, "max_tokens": 8192,
+}
+for accumulated in continuations:
+    body = _prepare_retry_request(external, accumulated, "assistant", 8192, "max_tokens")
+    apply_openai_sampling(body, {"temperature": 0.7, "top_p": 0.9, "top_k": 8, "min_p": 0.2}, True)
+    assert tuple(body[key] for key in ("temperature", "top_p", "top_k", "min_p")) == (0.7, 0.9, 8, 0.2)
+    assert body["max_tokens"] == 8192 - accumulated.completion_tokens
+omitted = {NATIVE_SAMPLING_KEY: True, "temperature": 0.0}
+apply_openai_sampling(omitted, {"temperature": 1.0, "top_p": 0.9}, False)
+assert omitted["temperature"] == 0.0 and omitted["top_p"] == 0.9
 print(json.dumps([{
     "path": path, "name": config.run.id, "entrypoint": config.runtime.entrypoint,
     "nodes": config.iris.allocation.num_nodes, "eval_interval": config.skyrl.trainer.eval_interval,

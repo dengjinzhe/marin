@@ -2,7 +2,7 @@ import json
 import errno
 from typing import Any, Dict, Protocol
 
-from skyrl_train.inference_engines.chat_continuation import EXACT_PROMPT_TOKEN_IDS_KEY
+from skyrl_train.inference_engines.chat_continuation import NATIVE_SAMPLING_KEY
 
 from skyrl_train.config.behavior_logprobs import (
     ROLLOUT_LOGPROB_VALIDATION_KEY,
@@ -139,15 +139,13 @@ def apply_openai_sampling(
     body: Dict[str, Any], sampling_params: Dict[str, Any], validate_rollout_logprob_sampling: bool
 ) -> None:
     """Apply generator sampling overrides and validate training probabilities."""
-    if EXACT_PROMPT_TOKEN_IDS_KEY not in body:
-        body.update(
-            {
-                "temperature": sampling_params.get("temperature", 1.0),
-                "top_p": sampling_params.get("top_p", 1.0),
-                "top_k": sampling_params.get("top_k", -1),
-                "min_p": sampling_params.get("min_p", 0.0),
-            }
-        )
+    defaults = {
+        "temperature": sampling_params.get("temperature", 1.0),
+        "top_p": sampling_params.get("top_p", 1.0),
+        "top_k": sampling_params.get("top_k", -1),
+        "min_p": sampling_params.get("min_p", 0.0),
+    }
+    body.update({key: value for key, value in defaults.items() if not body.get(NATIVE_SAMPLING_KEY) or key not in body})
     # Completion logprobs=0 requests sampled-token probabilities; False disables chat logprobs.
     logprobs = body.get("logprobs")
     if validate_rollout_logprob_sampling and logprobs is not None and logprobs is not False:

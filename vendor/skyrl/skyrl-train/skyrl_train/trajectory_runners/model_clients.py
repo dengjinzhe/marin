@@ -30,6 +30,7 @@ from skyrl_train.inference_engines.base import (
 from skyrl_train.inference_engines.chat_continuation import (
     CHAT_TOKENIZE_FIELDS,
     EXACT_PROMPT_TOKEN_IDS_KEY,
+    NATIVE_SAMPLING_KEY,
     render_exact_chat_continuation,
 )
 from skyrl_train.inference_engines.chat_template import (
@@ -372,6 +373,7 @@ class DirectModelClient:
                 "include_stop_str_in_output": True,
             }
             body[EXACT_PROMPT_TOKEN_IDS_KEY] = prompt_ids
+            body[NATIVE_SAMPLING_KEY] = True
             if sampling_params.get("stop") is not None:
                 body["stop"] = sampling_params["stop"]
             if sampling_params.get("logprobs") is not None:
