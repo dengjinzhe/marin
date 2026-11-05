@@ -1051,10 +1051,10 @@ def test_panel_scores_join_permuted_answers_and_aggregate_tasks(tmp_path):
         directory.mkdir(parents=True)
         (directory / "panel.jsonl").write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in answers) + "\n")
         (directory / "aggregated_results.jsonl").write_text('{"avg_score": 0.5}\n')
-    directory = tmp_path / "exports/test_panel/dumped_evals/eval_only"
-    directory.mkdir(parents=True)
-    (directory / "quality.jsonl").write_text(json.dumps(_answer("heldout", 0.75)) + "\n")
-    quality_scores = scoring.panel_scores(presets.EVALUATIONS["test_panel"], str(tmp_path))
+    _json(tmp_path / "exports/test_panel/dumped_evals/eval_only/quality.jsonl", _answer("heldout", 0.75))
+    quality_scores = scoring.panel_scores(
+        presets.EVALUATIONS["test_panel"], str(tmp_path), scoring.evaluation_answers(str(tmp_path))
+    )
     assert [(row["item"], row["family"], row["step"]) for row in quality_scores.to_pylist()] == [
         ("heldout", "general", -1)
     ]

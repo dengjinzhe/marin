@@ -35,7 +35,7 @@ East means `cw-us-east-02a`; Reno means `cw-rno2a`. The 40-H100 layout has 32
 policy GPUs and 8 engine GPUs, 128 prompts×4 answers, a 24,576-token window and 8,192
 reply tokens. The 112-H100 layout has 64 policy GPUs and 48 engine GPUs, 512×16,
 a 65,536-token window and 32,768 reply tokens. Both use staleness 2 for train-long;
-medium runs use staleness 0. East uses sockets; Reno uses InfiniBand.
+speed-medium, learning-medium and data-medium use staleness 0. East uses sockets; Reno uses InfiniBand.
 Speed-long uses the asynchronous 40-H100 recipe without evaluation, checkpoints or
 export. It guards throughput and reports mismatch, phase timings, grading/setup
 timers, staleness summaries and selected-token counts by staleness bucket.
@@ -61,7 +61,7 @@ selection must name the same heldout input as the default selection.
 
 `--init NAME@VERSION` on learning-medium or train-long selects another model
 artifact or a retained HF export. It also evaluates the initial weights.
-Learning/data controls retain their final HF weights automatically; candidates do so with
+Learning-medium/data-medium controls retain their final HF weights automatically; candidates do so with
 `--keep-weights`. Kept HF exports have no expiry and can initialize later runs with `--init`.
 Train-long retains checkpoints and exports weights by default. `--resume-from RUN` on train-long continues the
 earlier train-long checkpoint root and optimizer state under a new run identity.
@@ -136,9 +136,9 @@ do not determine the change label. Initializer values average candidate replicat
 task counts are unavailable when their scored-task counts differ.
 
 Every planned batch/update must finish, losses and gradients must be finite, panel
-coverage must reach 99%, grader infrastructure failures must be at most 1%, and speed
-replies must have the fixed length. Mismatched pins, preset revisions or panel IDs,
-missing receipts/provenance/guards, missing mismatch tokens or zero control variation
+coverage must reach 99%, grader infrastructure failures must be at most 1%, and speed-short/speed-medium
+throughput replies must have the fixed length. Mismatched pins, preset revisions or panel IDs,
+missing receipts/provenance/guards, missing mismatch tokens or zero control variation in a calibrated guard
 give `invalid` with a reason.
 
 The report bounds overlapping failure counts: upper ≤ 1% passes; lower > 1% fails.
@@ -174,8 +174,8 @@ mean normalized scores, excluding grading errors. Reports join easy (> 0.7), lea
 The pinned `snowball-100k@2026.11.04.1` selection contains 100,000 training tasks
 with local graders. Selections containing AI-judged tasks are refused before GPU submission.
 Its held-out development rows and the test panel are excluded from training.
-Create candidates through [task curation](../references/task-curation.md), using
-the admitted FULL corpus and immutable recipe versions. The manifest provides
+Create candidates through task curation's [final task selection](../references/task-curation.md#final-task-selection),
+using admitted sources from a FULL campaign and immutable recipe versions. The manifest provides
 task IDs, family, AAII category, agentic flag and grader kind.
 
 The default evaluation artifact, `snowball-test-panel@2026.11.04.2`, contains 1,500 full
@@ -234,7 +234,7 @@ Each run forwards its required keys through Iris.
 
 | gap | implication and follow-up |
 |---|---|
-| layout-p40-only | calibrated gates cover the 40-GPU layout; other layouts need qualification |
+| layout-p40-only | calibrated training gates cover the 40-GPU layout; other training layouts need qualification |
 | AAII coverage; no-agentic-tasks | the panel covers scientific reasoning, coding, General and a single-turn Agents stand-in; multi-turn tool use and long-context coverage need separate qualification |
 | no-image-sandbox | image-only tasks need the planned sandbox backend |
 | no-async-speed-gate | Speed-long has no pinned controls; collect controls before using its throughput verdict. |

@@ -41,8 +41,8 @@ and prints the final status and report. It exits 0 for PASS or a finished ungate
 --baseline NAME@VERSION adds a comparison with earlier finished runs; the verdict uses the
 pinned controls. Status includes each run's latest completed update and saved W&B URL.
 Panel evaluation is seeded and greedy, with natural replies up to EVAL_REPLY_TOKENS (8,192).
---keep-weights retains a learning/data candidate's final HF export for --init or later evaluation;
-learning/data controls retain theirs automatically. Selections must contain no AI-judged tasks.
+--keep-weights retains a learning-medium/data-medium candidate's final HF export for --init or
+later evaluation; their controls retain weights automatically. Selections must contain no AI-judged tasks.
 Set WANDB_ENTITY before submission to choose the W&B team; unset uses marin-community.
 --version dev satisfies
 the launcher; Snowball steps use PRESET_REVISION. Guide: docs/recipes/snowball-rl.md.
@@ -52,7 +52,8 @@ Examples, each after `uv run python -m experiments.post_training.snowball_rl`:
   --preset speed-medium --version dev --run
   --preset speed-medium --version dev --run --wait
   --preset speed-medium --baseline EARLIER_RUN@2026.10.27 --version dev --run --wait
-  --preset learning-medium --set trainer.algorithm.advantage_estimator=grpo --version dev --run
+  --preset learning-medium --set trainer.algorithm.advantage_estimator=grpo \\
+    --set trainer.algorithm.group_advantage_min_size=null --version dev --run
   --preset speed-medium --require 'policy/mismatch/staleness0/log_ratio_abs_max<=0' --version dev --run
   --preset learning-medium --require 'test_panel/aaii_category/coding/mean>=control' --version dev --run
   --preset learning-medium --keep-weights --version dev --run

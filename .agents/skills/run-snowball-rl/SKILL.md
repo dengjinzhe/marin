@@ -139,7 +139,7 @@ window, or a panel slice. It refuses other keys before launch.
   Slice keys include `test_panel/family/<family>/mean` and `test_panel/aaii_category/<category>/mean`;
   the `slice` column of a finished report's
   Breakdown tables lists the exact names.
-- Learning/data controls retain their final HF weights. Candidates retain them with `--keep-weights`:
+- Learning-medium/data-medium controls retain their final HF weights. Candidates retain them with `--keep-weights`:
 
   ```bash
   uv run python -m experiments.post_training.snowball_rl --preset learning-medium \
