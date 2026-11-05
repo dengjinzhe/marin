@@ -881,6 +881,12 @@ def run_command(*, help_text: str | None = None):
                 "the gain.",
             ),
             click.option(
+                "--keep-weights",
+                is_flag=True,
+                help="Save a learning/data candidate's final HF weights. "
+                "Learning controls and train-long save them automatically.",
+            ),
+            click.option(
                 "--resume-from",
                 "resume_name",
                 metavar="NAME[@VERSION]",
@@ -914,8 +920,8 @@ def run_command(*, help_text: str | None = None):
                 "--control",
                 is_flag=True,
                 help="Run the preset's control replicates from a clean checkout with only its pinned default "
-                "inputs. Only for pinning new controls; refuses --set, --tasks, --init, --eval, --require and "
-                "data-medium, which uses learning-medium's controls.",
+                "inputs. Only for pinning new controls; refuses --set, --tasks, --init, --eval, --require, "
+                "--keep-weights and data-medium, which uses learning-medium's controls.",
             ),
         )
         command = rl_build_options(function)

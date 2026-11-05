@@ -75,6 +75,13 @@ def test_presets_compose_and_preserve_measurement_contracts(selection, tmp_path,
                 paths.append(str(path))
                 if index == 0:
                     launches[name] = document
+    default_learning = snowball.build_run(presets.PRESETS["learning-medium"])
+    for label, options in (("kept", {"keep_weights": True}), ("control", {"control": True})):
+        retained = snowball.build_run(presets.PRESETS["learning-medium"], **options)
+        assert retained.runs[0].name != default_learning.runs[0].name
+        path = tmp_path / f"{label}-weights.yaml"
+        _render(retained.runs[0], path, runtime=True)
+        paths.append(str(path))
     off_boundary = snowball.build_run(
         presets.PRESETS["train-long"], layout=presets.P40, settings=(presets.parse_setting("trainer.max_steps=2"),)
     ).runs[0]
@@ -158,7 +165,7 @@ external = {"temperature": 0.0, "top_p": 1.0, "top_k": -1, "min_p": 0.0, "logpro
 apply_openai_sampling(external, {"temperature": 0.7, "top_p": 0.9, "top_k": 8, "min_p": 0.2}, True)
 assert tuple(external[key] for key in ("temperature", "top_p", "top_k", "min_p")) == (0.7, 0.9, 8, 0.2)
 print(json.dumps([{
-    "name": config.run.id, "entrypoint": config.runtime.entrypoint,
+    "path": path, "name": config.run.id, "entrypoint": config.runtime.entrypoint,
     "nodes": config.iris.allocation.num_nodes, "eval_interval": config.skyrl.trainer.eval_interval,
     "validation": bool(config.inputs.validation_data),
     "admission": config.skyrl.trajectory_runner.max_concurrent_tasks,
@@ -180,7 +187,7 @@ print(json.dumps([{
         {"temperature": 0.7, "top_p": 0.9, "top_k": 8, "min_p": 0.2},
         config.runtime.training_type is not None,
     )) if config.inputs.validation_data else None,
-} for config in configs]))
+} for path, config in zip(sys.argv[1:], configs, strict=True)]))
 """,
         paths,
     )
@@ -196,6 +203,10 @@ print(json.dumps([{
             assert row["admission"] == expected, row
         if "train-long-" in name:
             assert row["terminal_eval"] == [row["steps"] % 10 != 0], row
+        if "learning-medium-" in name or "/control/learning-medium-" in name:
+            saved = row["path"].endswith(("kept-weights.yaml", "control-weights.yaml"))
+            assert row["export_hf"] == saved
+            assert ("hf_model_save" in row["callbacks"]) == saved
         if "speed-long-" in name:
             assert not row["validation"] and not row["export_hf"]
         if row["fixed"]:

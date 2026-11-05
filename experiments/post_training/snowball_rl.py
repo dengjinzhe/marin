@@ -244,7 +244,7 @@ def _model_input(init: ArtifactStep | None) -> SkyRLModelSource:
         except FileNotFoundError as error:
             raise click.BadParameter("the initializer requires a completed published artifact record") from error
         if not result.get("hf_model_uri"):
-            raise click.BadParameter("the initializer run has no HF export; gated runs cannot initialize another run")
+            raise click.BadParameter("the initializer run has no HF export")
         return SkyRLPolicyModel(init)
     return ArtifactHfModel(init, presets.MODEL_ID, presets.MODEL_REVISION)
 
@@ -381,11 +381,18 @@ def build_run(
     evaluations: tuple[str, ...] = (),
     replicates: int = 1,
     control: bool = False,
+    keep_weights: bool = False,
     requirements: tuple[str, ...] = (),
     baselines: tuple[str, ...] = (),
 ) -> SnowballRun:
     """Construct a Snowball experiment: one run step per replicate and, for a gated preset, its gate step."""
     snowball_rl_gate.check_requirements(preset, requirements, control=control)
+    learning = (
+        preset.focus in (presets.Focus.LEARNING, presets.Focus.DATA) and not preset.recipe.layout.role_plan.generate_only
+    )
+    if keep_weights and (control or not learning):
+        raise click.BadParameter("--keep-weights needs a learning/data candidate")
+    export_hf = preset.focus == presets.Focus.TRAIN or (learning and (control or keep_weights))
     if baselines and (control or preset.name not in snowball_rl_gate.CONTROLS):
         raise click.BadParameter("--baseline needs a gated candidate preset, without --control")
     settings = tuple(leaf for setting in settings for leaf in presets.setting_leaves(setting))
@@ -452,6 +459,13 @@ def build_run(
     if not preset.recipe.layout.role_plan.generate_only:
         expected_tasks = presets.selection_summary(default)["validation_rows"]
         config["trainer"]["callbacks"] = _callbacks(preset, chosen, expected_tasks)
+    if learning and export_hf:
+        config["trainer"]["callbacks"].extend(
+            (
+                {"type": "checkpoint", "save_steps": preset.updates + 1, "save_on_train_end": True},
+                {"type": "hf_model_save", "save_steps": -1, "save_on_train_end": True},
+            )
+        )
     changes = {
         "tasks": (selection.name, selection.version),
         "init": None if init is None else (init.name, init.version),
@@ -459,6 +473,7 @@ def build_run(
         "resume": None if resume_from is None else (resume_from.name, resume_from.version),
         "settings": sorted({setting.key: setting.value for setting in settings}.items()),
         "evaluations": sorted(selected),
+        "keep_weights": keep_weights,
     }
     inputs_hash = fingerprint_hash(json.dumps(changes, sort_keys=True, default=str))
     wandb_entity = os.environ.get("WANDB_ENTITY") or DEFAULT_WANDB_ENTITY
@@ -472,7 +487,7 @@ def build_run(
             selection,
             required,
             layout=preset.recipe.layout,
-            export_hf=preset.focus == presets.Focus.TRAIN,
+            export_hf=export_hf,
             retention=5 if preset.checkpoint_every else 2,
             validation_data=validation_data,
             wandb_entity=wandb_entity,
@@ -720,6 +735,7 @@ def main(
     evaluations: tuple[str, ...],
     replicates: int,
     control: bool,
+    keep_weights: bool,
     requirements: tuple[str, ...],
     baselines: tuple[str, ...],
 ) -> tuple[ArtifactStep, ...]:
@@ -737,6 +753,7 @@ def main(
         evaluations=evaluations,
         replicates=replicates,
         control=control,
+        keep_weights=keep_weights,
         requirements=requirements,
         baselines=baselines,
     )
