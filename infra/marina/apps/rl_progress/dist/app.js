@@ -21,7 +21,7 @@ const arm = (run) => run.label.match(/\b([A-D]\d+)\b/)?.[1] ?? run.label;
 const color = (run) => colors[arm(run)[0]] ?? '#6d6a60';
 const number = (value, digits = 4) => Number.isFinite(value) ? value.toFixed(digits) : '—';
 const hours = (run) => run.elapsed_seconds / 3600;
-const gain = (run) => run.final && run.baseline ? (run.final.reward - run.baseline.reward) / hours(run) : null;
+const gain = (run) => run.gain_per_hour;
 const day = (date) => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Los_Angeles', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(date));
 function visibleRuns() {
   return runs.filter((run) => $('campaign').value === 'all' || fixed(run) === ($('campaign').value === 'fixed'));

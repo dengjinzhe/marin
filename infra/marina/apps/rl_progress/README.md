@@ -37,6 +37,11 @@ comparison fields. A runtime evaluation protocol hash is distinct from a declare
 source protocol; absent runtime identity remains null. Names do not define a
 comparison group. Use `wandb_url` for an exact W&B run link when recorded.
 
+Each evaluation phase has `samples_per_task`, defaulting to one. Expected answer
+counts are the unique task count times that phase's sample count. Unequal baseline
+and final sample counts have no reported gain; a complete final measurement keeps
+its own eligibility. Default-one records retain their comparison keys and stored JSON.
+
 ## Validate and release
 
 From the repository root:

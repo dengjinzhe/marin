@@ -29,6 +29,7 @@ class EvaluationResult(BaseModel):
     reward: FiniteFloat
     attempted: Count
     scored: Count
+    samples_per_task: Annotated[StrictInt, Field(gt=0)] = 1
 
     @model_validator(mode="after")
     def valid_coverage(self):
@@ -98,10 +99,12 @@ class RunSummary(BaseModel):
         if self.final is not None and (self.baseline is None or self.elapsed_seconds <= 0):
             raise ValueError("A final measurement requires a baseline and positive elapsed time")
         for phase in (self.baseline, self.final):
-            if phase is not None and phase.attempted > self.evaluation.task_count:
+            if phase is not None and phase.attempted > self.evaluation.task_count * phase.samples_per_task:
                 raise ValueError("Attempted count exceeds the fixed evaluation cohort")
         if self.status == "succeeded" and any(
-            phase is None or phase.attempted != self.evaluation.task_count or phase.scored != self.evaluation.task_count
+            phase is None
+            or phase.attempted != self.evaluation.task_count * phase.samples_per_task
+            or phase.scored != self.evaluation.task_count * phase.samples_per_task
             for phase in (self.baseline, self.final)
         ):
             raise ValueError("Successful attempts require complete baseline and final scoring")
@@ -159,7 +162,7 @@ def publish_result(record: dict[str, Any], service_url: str = DEFAULT_MARINA_URL
         if served[field] != record[field]:
             raise RuntimeError(f"Dashboard API disagrees with stored {field}")
     complete = all(
-        phase is not None and phase.scored == phase.attempted == summary.evaluation.task_count
+        phase is not None and phase.scored == phase.attempted == summary.evaluation.task_count * phase.samples_per_task
         for phase in (summary.baseline, summary.final)
     )
     if served["partial_coverage"] != (not complete):

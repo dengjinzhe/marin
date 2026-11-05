@@ -24,6 +24,26 @@ def test_partial_baseline_is_not_a_trusted_gain_and_names_do_not_change_cohort()
     complete = comparison_fields(run)
     assert complete["trusted_gain_eligible"] is True
     assert comparison_fields(run | {"label": "Fixed runtime · control"}) == complete
+    explicit = run | {
+        "baseline": run["baseline"] | {"samples_per_task": 1},
+        "final": run["final"] | {"samples_per_task": 1},
+    }
+    assert comparison_fields(explicit) == complete
+    run["baseline"].update(samples_per_task=8, attempted=800, scored=800)
+    mixed = comparison_fields(run)
+    assert mixed["comparison_key"] == complete["comparison_key"]
+    assert mixed["expected_membership_count"] == 100
+    assert not mixed["partial_coverage"] and mixed["pareto_eligible"]
+    assert mixed["gain_per_hour"] is None and not mixed["trusted_gain_eligible"]
+    run["final"].update(samples_per_task=8, attempted=800, scored=800)
+    repeated = comparison_fields(run)
+    assert repeated["comparison_key"] != complete["comparison_key"]
+    assert repeated["gain_per_hour"] == pytest.approx(0.2) and repeated["trusted_gain_eligible"]
+    run["baseline"]["scored"] = 799
+    assert comparison_fields(run)["partial_coverage"]
+    assert not comparison_fields(run)["trusted_gain_eligible"]
+    run["baseline"] = {"reward": 0.2, "attempted": 100, "scored": 100}
+    run["final"] = {"reward": 0.4, "attempted": 100, "scored": 100}
     run["baseline"]["scored"] = 99
     partial = comparison_fields(run)
     assert partial["partial_coverage"] is True

@@ -29,15 +29,28 @@ def comparison_fields(run: dict) -> dict:
     if evaluation.get("task_set_sha256") and evaluation.get("protocol_sha256") and run.get("timing_scope"):
         identity = {name: evaluation[name] for name in ("task_set_sha256", "protocol_sha256")}
         identity["timing_scope"] = run["timing_scope"]
+        final_samples = (run.get("final") or {}).get("samples_per_task", 1)
+        if final_samples != 1:
+            identity["samples_per_task"] = final_samples
         key = hashlib.sha256(json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
     def complete(result):
-        return result is not None and expected is not None and result["attempted"] == result["scored"] == expected
+        return (
+            result is not None
+            and expected is not None
+            and result["attempted"] == result["scored"] == expected * result.get("samples_per_task", 1)
+        )
 
     baseline_full = complete(run.get("baseline"))
     final_full = complete(run.get("final"))
     final = run.get("final")
-    gain = None if final is None else (final["reward"] - run["baseline"]["reward"]) / (run["elapsed_seconds"] / 3600)
+    baseline = run.get("baseline")
+    comparable = (
+        baseline is not None
+        and final is not None
+        and baseline.get("samples_per_task", 1) == final.get("samples_per_task", 1)
+    )
+    gain = None if not comparable else (final["reward"] - baseline["reward"]) / (run["elapsed_seconds"] / 3600)
     pareto = key is not None and run["status"] == "succeeded" and final_full
     return {
         "comparison_key": key,
@@ -45,7 +58,7 @@ def comparison_fields(run: dict) -> dict:
         "gain_per_hour": gain,
         "partial_coverage": not (baseline_full and final_full),
         "provisional": key is None or not (baseline_full and final_full),
-        "trusted_gain_eligible": pareto and baseline_full,
+        "trusted_gain_eligible": pareto and baseline_full and comparable,
         "pareto_eligible": pareto,
     }
 
