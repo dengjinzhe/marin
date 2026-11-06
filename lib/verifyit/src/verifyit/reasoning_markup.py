@@ -19,10 +19,8 @@ REASONING_DELIMITERS = (
     ("<thinking>", "</thinking>"),
     ("<|start_think|>", "<|end_think|>"),
 )
-LENGTH_STOP_REASON = "length"
-"""The stop reason of a reply cut off by its token limit; an open span there is truncation, not a violation."""
+_LENGTH_STOP_REASON = "length"
 COMPLETED_STOP_REASON = "stop"
-"""The stop reason of a reply that ended on its own."""
 
 _CLOSING_MARKER = dict(REASONING_DELIMITERS)
 _REASONING_MARKER = re.compile("|".join(re.escape(marker) for pair in REASONING_DELIMITERS for marker in pair))
@@ -55,9 +53,9 @@ def first_reasoning_violation(
 ) -> ReasoningSpanError | None:
     """Find the first malformed marker among a reply's reasoning markers, in order.
 
-    A closing marker must match the opening marker of its span. A span left open by a length stop is
-    truncation, so it is not a violation by itself. ``prompt_opens_span`` says whether the prompt
-    ends inside a span, which only a leading closing marker may close.
+    A closing marker must match the opening marker of its span. A length stop excuses an open span.
+    ``prompt_opens_span`` says whether the prompt ends inside a span, which only a leading closing
+    marker may close.
     """
     if markers and markers[0] not in _CLOSING_MARKER and not prompt_opens_span:
         return ReasoningSpanError(ReasoningViolation.STRAY_END, 0)
@@ -69,7 +67,7 @@ def first_reasoning_violation(
             return ReasoningSpanError(ReasoningViolation.SECOND_SPAN, index)
         else:
             return ReasoningSpanError(ReasoningViolation.STRAY_END, index)
-    if expected_close is not None and stop_reason != LENGTH_STOP_REASON:
+    if expected_close is not None and stop_reason != _LENGTH_STOP_REASON:
         return ReasoningSpanError(ReasoningViolation.UNCLOSED, None)
     return None
 

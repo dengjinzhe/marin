@@ -109,11 +109,7 @@ class UnsolvableSpec:
 
 @dataclass(frozen=True)
 class ReasoningMarkupSpec:
-    """Credit a reply whose reasoning markup is well formed: at most one closed span, no stray closer.
-
-    The reply text must retain its reasoning markers. The prompt is taken to open no span, so a
-    leading closer is stray. A span left open by a length stop is truncation, not a violation.
-    """
+    """Grade decoded reply markers, assuming the prompt opened no span. Length stops excuse open spans."""
 
     output: str = DEFAULT_OUTPUT
     empty_output: EmptyOutputPolicy = field(default=EmptyOutputPolicy.ZERO, kw_only=True)

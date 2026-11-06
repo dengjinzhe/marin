@@ -1,15 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Credit a reply whose reasoning markup is well formed.
-
-The candidate is the reply text with its reasoning markers retained, and the reason generation
-stopped. A reply with no markers is well formed. The prompt is taken to open no span, so a leading
-closing marker is stray. A span left open by a length stop is truncation, not a violation. The file
-grader reads no stop reason, so there an unclosed span is always a violation. The verdict names the
-violation (``unclosed``, ``second_span`` or ``stray_end``) when there is one.
-"""
-
 from pathlib import Path
 
 from verifyit.grade import Reward, empty_output_policy, read_output, scored
